@@ -32,6 +32,11 @@ sudo pip3 install bless --break-system-packages
 echo "Installing Whisplay HAT driver..."
 cd ~
 git clone https://github.com/PiSugar/Whisplay.git --depth 1
+cd pfe-sensor
+git config --global user.name "Zietgeist"
+git config --global user.email "ivan.martens@gmail.com"
+git config --global credential.helper store
+
 cd ~/Whisplay/Driver
 sudo bash install_wm8960_drive.sh
 
