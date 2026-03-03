@@ -13,6 +13,7 @@ sys.path.append('/home/ivan/Whisplay/Driver')
 from WhisPlay import WhisPlayBoard
 
 # --- Constants ---
+DEVICE_NAME = os.uname().nodename
 SDP_ADDRESS         = 0x25
 SERVICE_UUID        = "12345678-1234-5678-1234-56789abcdef0"
 PRESSURE_CHAR_UUID  = "12345678-1234-5678-1234-56789abcdef1"
@@ -74,8 +75,11 @@ def make_screen(pressure, temperature, target):
         font_small = ImageFont.truetype(font_path, 18)
     else:
         font_big = font_med = font_small = ImageFont.load_default()
-
-    draw.text((10, 5), "PFE Sensor", font=font_small, fill=(100, 100, 255))
+    import socket
+#    hostname = socket.gethostname()
+#    draw.text((10, 5), hostname, font=font_small, fill=(100, 100, 255))
+#    draw.text((10, 5), "PFE Sensor", font=font_small, fill=(100, 100, 255))
+    draw.text((10, 5), DEVICE_NAME, font=font_small, fill=(100, 100, 255))
 
     if pressure is not None:
         pa = abs(pressure)
@@ -122,7 +126,7 @@ def screen_thread(board, splash):
 async def run_ble():
     global current_pressure, target_pressure
 
-    server = BlessServer(name="PFE Sensor")
+    server = BlessServer(name=DEVICE_NAME)
     server.read_request_func = handle_read
     server.write_request_func = handle_write
 
