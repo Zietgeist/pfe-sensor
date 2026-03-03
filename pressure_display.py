@@ -29,7 +29,7 @@ target_pressure = -1.0
 # --- Load splash image ---
 def load_splash():
     try:
-        img = Image.open('/home/ivan/marten_screen.png').convert('RGB')
+        img = Image.open('/home/ivan/pfe-sensor/marten_screen.png').convert('RGB')
         pixels = []
         for r, g, b in img.getdata():
             rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
