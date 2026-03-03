@@ -61,8 +61,8 @@ Wants=bluetooth.target
 [Service]
 ExecStartPre=/usr/sbin/rfkill unblock bluetooth
 ExecStartPre=/bin/sleep 5
-ExecStart=/usr/bin/python3 /home/pi/pressure_display.py
-WorkingDirectory=/home/pi
+ExecStart=/usr/bin/python3 /home/ivan/pressure_display.py
+WorkingDirectory=/home/ivan
 User=root
 Restart=on-failure
 RestartSec=5
