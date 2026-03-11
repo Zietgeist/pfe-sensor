@@ -464,8 +464,8 @@ def screen_thread(board, splash):
             p2   = current_pressure2
             tgt  = target_pressure
             mode = wifi_mode
-        current = (round(p1, 2) if p1 else None,
-                   round(p2, 2) if p2 else None,
+        current = (round(p1, 1) if p1 else None,
+                   round(p2, 1) if p2 else None,
                    tgt, mode)
         if is_active and current != last:
             screen_data = make_screen(p1, p2, tgt, mode)
