@@ -29,7 +29,8 @@ from WhisPlay import WhisPlayBoard
 
 # --- Constants ---
 DEVICE_NAME        = os.uname().nodename
-SDP_ADDRESS        = 0x25
+SDP_ADDR_1         = 0x25   # Sensor 1 (inlet)
+SDP_ADDR_2         = 0x26   # Sensor 2 (outlet)
 SERVICE_UUID       = "12345678-1234-5678-1234-56789abcdef0"
 PRESSURE_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1"
 TARGET_CHAR_UUID   = "12345678-1234-5678-1234-56789abcdef2"
@@ -44,15 +45,18 @@ WEB_PORT           = 80
 TARGET_PRESSURE    = -12.5   # Pa — adjust as needed
 
 # --- Shared state ---
-lock             = threading.Lock()
-active           = False
-current_pressure = 0.0
-current_temp     = 0.0
-target_pressure  = TARGET_PRESSURE
-is_host          = False
-wifi_mode        = "searching"   # "home" | "host" | "client" | "searching"
+lock              = threading.Lock()
+active            = False
+current_pressure1 = None   # Sensor 1 (0x25)
+current_temp1     = None
+current_pressure2 = None   # Sensor 2 (0x26)
+current_temp2     = None
+target_pressure   = TARGET_PRESSURE
+is_host           = False
+wifi_mode         = "searching"   # "home" | "host" | "client" | "searching"
 
-# Sensor data store (host only) { "PFE-1": {"pressure": -12.3, "temp": 20.1, "time": 123456} }
+# Sensor data store (host only)
+# { "PFE-1": {"s1": -12.3, "s2": -11.9, "temp1": 20.1, "temp2": 20.3, "time": 123456} }
 sensor_data = {}
 
 
@@ -61,7 +65,6 @@ sensor_data = {}
 # =============================================================
 
 def scan_for(ssid, retries=2):
-    """Return True if ssid is visible in a WiFi scan."""
     for _ in range(retries):
         try:
             result = subprocess.run(
@@ -76,7 +79,6 @@ def scan_for(ssid, retries=2):
     return False
 
 def connect_to(ssid, password):
-    """Connect to a WiFi network. Returns True on success."""
     try:
         subprocess.run([
             'sudo', 'nmcli', 'dev', 'wifi', 'connect', ssid,
@@ -90,7 +92,6 @@ def connect_to(ssid, password):
         return False
 
 def create_hotspot():
-    """Create PFE-NET hotspot. Returns True on success."""
     try:
         print(f"Creating hotspot: {SITE_SSID}")
         subprocess.run([
@@ -107,7 +108,6 @@ def create_hotspot():
         return False
 
 def get_host_ip():
-    """Find the gateway IP on wlan0 (the host's IP)."""
     try:
         result = subprocess.run(
             ['ip', 'route', 'show', 'dev', 'wlan0'],
@@ -121,13 +121,8 @@ def get_host_ip():
     return HOST_IP
 
 def setup_wifi():
-    """
-    WiFi priority logic — runs once at startup.
-    Returns: "home" | "host" | "client"
-    """
     global wifi_mode
 
-    # 1. Check for PFE-home
     print(f"Checking for {HOME_SSID}...")
     if scan_for(HOME_SSID):
         print(f"{HOME_SSID} found — connecting for updates")
@@ -135,12 +130,10 @@ def setup_wifi():
             wifi_mode = "home"
             return "home"
 
-    # 2. Random delay to prevent two devices creating hotspot simultaneously
     delay = random.uniform(1, 5)
     print(f"No home network. Waiting {delay:.1f}s before checking for {SITE_SSID}...")
     time.sleep(delay)
 
-    # 3. Check for PFE-NET
     print(f"Checking for {SITE_SSID}...")
     if scan_for(SITE_SSID):
         print(f"{SITE_SSID} found — joining as client")
@@ -148,13 +141,11 @@ def setup_wifi():
             wifi_mode = "client"
             return "client"
 
-    # 4. No networks found — become the host
     print(f"No networks found — becoming host")
     if create_hotspot():
         wifi_mode = "host"
         return "host"
 
-    # Fallback
     wifi_mode = "searching"
     return "searching"
 
@@ -165,7 +156,7 @@ def setup_wifi():
 
 class DashboardHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        pass  # Suppress noisy request logs
+        pass
 
     def do_GET(self):
         if self.path == '/data':
@@ -195,14 +186,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             try:
                 payload = json.loads(body)
                 name = payload.get('name')
-                pressure = payload.get('pressure')
-                temp = payload.get('temp')
-                if name and pressure is not None:
+                if name:
                     with lock:
                         sensor_data[name] = {
-                            'pressure': pressure,
-                            'temp': temp,
-                            'time': time.time()
+                            's1':    payload.get('s1'),
+                            's2':    payload.get('s2'),
+                            'temp1': payload.get('temp1'),
+                            'temp2': payload.get('temp2'),
+                            'time':  time.time()
                         }
                 self.send_response(200)
                 self.end_headers()
@@ -219,22 +210,28 @@ def build_dashboard_html():
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PFE Sensor Dashboard</title>
   <style>
-    body {{ font-family: Arial, sans-serif; background: #111; color: #eee; margin: 0; padding: 20px; }}
-    h1 {{ color: #6af; text-align: center; margin-bottom: 6px; }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{ font-family: Arial, sans-serif; background: #111; color: #eee; padding: 20px; }}
+    h1 {{ color: #6af; text-align: center; margin-bottom: 4px; font-size: 1.6em; }}
     .subtitle {{ text-align: center; color: #555; font-size: 0.85em; margin-bottom: 24px; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; max-width: 960px; margin: 0 auto; }}
-    .card {{ background: #222; border-radius: 12px; padding: 20px; text-align: center; border: 2px solid #444; }}
-    .card.pass {{ border-color: #0f0; }}
-    .card.fail {{ border-color: #f44; }}
-    .card.stale {{ border-color: #555; opacity: 0.5; }}
-    .sensor-name {{ font-size: 1.1em; color: #adf; margin-bottom: 10px; font-weight: bold; }}
-    .pressure {{ font-size: 2.5em; font-weight: bold; }}
-    .unit {{ font-size: 0.85em; color: #888; margin-top: 4px; }}
-    .temp {{ font-size: 0.85em; color: #aaa; margin-top: 6px; }}
-    .status {{ margin-top: 10px; font-size: 1.1em; font-weight: bold; }}
-    .pass-text {{ color: #0f0; }} .fail-text {{ color: #f44; }} .stale-text {{ color: #666; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; max-width: 1100px; margin: 0 auto; }}
+    .device-card {{ background: #1a1a1a; border-radius: 14px; padding: 18px; border: 2px solid #333; }}
+    .device-card.pass {{ border-color: #0c0; }}
+    .device-card.fail {{ border-color: #f44; }}
+    .device-card.stale {{ border-color: #444; opacity: 0.5; }}
+    .device-name {{ font-size: 1.1em; font-weight: bold; color: #adf; margin-bottom: 14px; display: flex; justify-content: space-between; }}
+    .status-badge {{ font-size: 0.8em; padding: 2px 10px; border-radius: 20px; font-weight: bold; }}
+    .badge-pass {{ background: #0a3; color: #fff; }}
+    .badge-fail {{ background: #933; color: #fff; }}
+    .badge-stale {{ background: #333; color: #777; }}
+    .sensors {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
+    .sensor-box {{ background: #222; border-radius: 10px; padding: 12px; text-align: center; }}
+    .sensor-label {{ font-size: 0.75em; color: #888; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }}
+    .sensor-value {{ font-size: 1.9em; font-weight: bold; }}
+    .sensor-inwc {{ font-size: 0.75em; color: #777; margin-top: 3px; }}
+    .sensor-na {{ font-size: 1.4em; color: #444; }}
     #footer {{ text-align: center; color: #444; font-size: 0.8em; margin-top: 24px; }}
-    .no-sensors {{ text-align: center; color: #555; margin-top: 60px; font-size: 1.1em; grid-column: 1/-1; }}
+    .no-sensors {{ text-align:center; color:#555; margin-top:60px; font-size:1.1em; grid-column:1/-1; }}
   </style>
 </head>
 <body>
@@ -244,6 +241,12 @@ def build_dashboard_html():
   <div id="footer"></div>
   <script>
     const TARGET = {TARGET_PRESSURE};
+    function fmtPa(v) {{ return v !== null && v !== undefined ? v.toFixed(2) : '--'; }}
+    function fmtInWC(v) {{ return v !== null && v !== undefined ? (Math.abs(v)/249.0).toFixed(4) : '--'; }}
+    function sensorColor(v, stale) {{
+      if (stale || v === null || v === undefined) return '#555';
+      return v <= TARGET ? '#0f0' : '#f44';
+    }}
     async function refresh() {{
       try {{
         const res = await fetch('/data');
@@ -251,26 +254,33 @@ def build_dashboard_html():
         const grid = document.getElementById('grid');
         const now = Date.now() / 1000;
         const names = Object.keys(data).sort();
-        if (names.length === 0) {{
-          grid.innerHTML = '<div class="no-sensors">Waiting for sensors...</div>';
-          return;
-        }}
+        if (!names.length) {{ grid.innerHTML = '<div class="no-sensors">Waiting for sensors...</div>'; return; }}
         grid.innerHTML = names.map(name => {{
           const s = data[name];
           const stale = (now - s.time) > 10;
-          const pass = s.pressure <= TARGET;
-          const inwc = (Math.abs(s.pressure) / 249.0).toFixed(4);
-          const cls = stale ? 'stale' : (pass ? 'pass' : 'fail');
-          const statusCls = stale ? 'stale-text' : (pass ? 'pass-text' : 'fail-text');
-          const statusTxt = stale ? 'OFFLINE' : (pass ? 'PASS' : 'FAIL');
-          const color = stale ? '#555' : (pass ? '#0f0' : '#f44');
-          const temp = s.temp !== null ? s.temp.toFixed(1) + ' °C' : '—';
-          return `<div class="card ${{cls}}">
-            <div class="sensor-name">${{name}}</div>
-            <div class="pressure" style="color:${{color}}">${{s.pressure.toFixed(2)}}</div>
-            <div class="unit">Pa &nbsp;|&nbsp; ${{inwc}} inWC</div>
-            <div class="temp">Temp: ${{temp}}</div>
-            <div class="status ${{statusCls}}">${{statusTxt}}</div>
+          const bothPass = !stale && (s.s1 !== null && s.s1 <= TARGET) && (s.s2 === null || s.s2 <= TARGET);
+          const anyFail  = !stale && ((s.s1 !== null && s.s1 > TARGET) || (s.s2 !== null && s.s2 > TARGET));
+          const cls = stale ? 'stale' : (bothPass ? 'pass' : (anyFail ? 'fail' : ''));
+          const badgeCls = stale ? 'badge-stale' : (bothPass ? 'badge-pass' : (anyFail ? 'badge-fail' : 'badge-stale'));
+          const badgeTxt = stale ? 'OFFLINE' : (bothPass ? 'PASS' : (anyFail ? 'FAIL' : '?'));
+          const c1 = sensorColor(s.s1, stale);
+          const c2 = sensorColor(s.s2, stale);
+          const s2html = (s.s2 !== null && s.s2 !== undefined)
+            ? `<div class="sensor-value" style="color:${{c2}}">${{fmtPa(s.s2)}}</div><div class="sensor-inwc">${{fmtInWC(s.s2)}} inWC</div>`
+            : `<div class="sensor-na">--</div>`;
+          return `<div class="device-card ${{cls}}">
+            <div class="device-name">${{name}}<span class="status-badge ${{badgeCls}}">${{badgeTxt}}</span></div>
+            <div class="sensors">
+              <div class="sensor-box">
+                <div class="sensor-label">Sensor 1 (Inlet)</div>
+                <div class="sensor-value" style="color:${{c1}}">${{fmtPa(s.s1)}}</div>
+                <div class="sensor-inwc">${{fmtInWC(s.s1)}} inWC</div>
+              </div>
+              <div class="sensor-box">
+                <div class="sensor-label">Sensor 2 (Outlet)</div>
+                ${{s2html}}
+              </div>
+            </div>
           </div>`;
         }}).join('');
         document.getElementById('footer').textContent = 'Updated: ' + new Date().toLocaleTimeString();
@@ -279,7 +289,7 @@ def build_dashboard_html():
       }}
     }}
     refresh();
-    setInterval(refresh, 3000);
+    setInterval(refresh, 1000);
   </script>
 </body>
 </html>"""
@@ -295,23 +305,26 @@ def run_web_server():
 # =============================================================
 
 def report_data_loop(host_ip):
-    """Send pressure readings to the host every 2 seconds."""
     url = f"http://{host_ip}/report"
     while True:
         try:
             with lock:
-                p = current_pressure
-                t = current_temp
+                p1 = current_pressure1
+                t1 = current_temp1
+                p2 = current_pressure2
+                t2 = current_temp2
             payload = json.dumps({
-                'name': DEVICE_NAME,
-                'pressure': p,
-                'temp': t
+                'name':  DEVICE_NAME,
+                's1':    p1,
+                's2':    p2,
+                'temp1': t1,
+                'temp2': t2,
             }).encode()
             req = Request(url, data=payload, headers={'Content-Type': 'application/json'})
             urlopen(req, timeout=3)
         except Exception as e:
             print(f"Report error: {e}")
-        time.sleep(2)
+        time.sleep(1)
 
 
 # =============================================================
@@ -319,14 +332,18 @@ def report_data_loop(host_ip):
 # =============================================================
 
 def init_sensor(bus):
-    bus.i2c_rdwr(i2c_msg.write(0x00, [0x06]))
-    time.sleep(0.05)
-
-def read_pressure(bus):
     try:
-        bus.i2c_rdwr(i2c_msg.write(SDP_ADDRESS, [0x36, 0x2F]))
+        bus.i2c_rdwr(i2c_msg.write(0x00, [0x06]))
+        time.sleep(0.05)
+    except Exception:
+        pass
+
+def read_sdp(bus, address):
+    """Read one SDP sensor. Returns (pressure_pa, temp_c) or (None, None) if missing."""
+    try:
+        bus.i2c_rdwr(i2c_msg.write(address, [0x36, 0x2F]))
         time.sleep(0.1)
-        read = i2c_msg.read(SDP_ADDRESS, 9)
+        read = i2c_msg.read(address, 9)
         bus.i2c_rdwr(read)
         data = list(read)
         raw_p = (data[0] << 8) | data[1]
@@ -362,59 +379,77 @@ def image_to_pixels(img):
         pixels.extend([(rgb565 >> 8) & 0xFF, rgb565 & 0xFF])
     return pixels
 
-def make_screen(pressure, temperature, target, mode):
-    img = Image.new('RGB', (240, 280), (0, 0, 0))
+def make_screen(p1, p2, target, mode):
+    """
+    Draw the screen with two sensor readings.
+    p1 / p2 are floats or None (None = sensor not present → show --)
+    """
+    img  = Image.new('RGB', (240, 280), (0, 0, 0))
     draw = ImageDraw.Draw(img)
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    if os.path.exists(font_path):
-        font_big   = ImageFont.truetype(font_path, 52)
-        font_med   = ImageFont.truetype(font_path, 24)
-        font_small = ImageFont.truetype(font_path, 18)
+    fp   = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    fr   = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    if os.path.exists(fp):
+        f_big   = ImageFont.truetype(fp, 44)
+        f_med   = ImageFont.truetype(fp, 20)
+        f_small = ImageFont.truetype(fr, 15)
+        f_tiny  = ImageFont.truetype(fr, 13)
     else:
-        font_big = font_med = font_small = ImageFont.load_default()
+        f_big = f_med = f_small = f_tiny = ImageFont.load_default()
 
-    # Device name
-    draw.text((10, 5), DEVICE_NAME, font=font_small, fill=(100, 100, 255))
-
-    # WiFi mode indicator
+    # ── Header bar ──────────────────────────────────────────
     mode_colors = {
         "home":      (100, 200, 100),
-        "host":      (200, 150, 50),
+        "host":      (200, 150,  50),
         "client":    (100, 180, 255),
-        "searching": (180, 180, 180),
+        "searching": (160, 160, 160),
     }
-    mode_labels = {
-        "home":      "HOME",
-        "host":      "HOST",
-        "client":    "CLIENT",
-        "searching": "...",
-    }
-    draw.text((170, 5), mode_labels.get(mode, "?"),
-              font=font_small, fill=mode_colors.get(mode, (180, 180, 180)))
+    mode_labels = {"home": "HOME", "host": "HOST", "client": "CLIENT", "searching": "..."}
+    draw.text((6,  4), DEVICE_NAME,               font=f_small, fill=(120, 120, 255))
+    draw.text((160, 4), mode_labels.get(mode, "?"), font=f_small, fill=mode_colors.get(mode, (160,160,160)))
 
-    if pressure is not None:
-        pa = abs(pressure)
-        inwc = pa / 249.0
-        passed = pressure <= target
-        color = (0, 255, 0) if passed else (255, 60, 60)
-        draw.text((170, 25), "PASS" if passed else "FAIL", font=font_med, fill=color)
-        draw.text((10, 40),  f"{pressure:.2f}", font=font_big, fill=color)
-        draw.text((10, 100), "Pa", font=font_med, fill=(200, 200, 200))
-        draw.text((80, 105), f"{inwc:.4f} inWC", font=font_small, fill=(180, 180, 180))
-        target_inwc = abs(target) / 249.0
-        draw.text((10, 140), f"Target: {target:.1f} Pa", font=font_small, fill=(150, 150, 255))
-        draw.text((10, 162), f"        {target_inwc:.4f} inWC", font=font_small, fill=(150, 150, 255))
-        draw.text((10, 200), f"Temp: {temperature:.1f} C", font=font_small, fill=(150, 150, 150))
+    # ── Divider ──────────────────────────────────────────────
+    draw.line([(0, 24), (240, 24)], fill=(50, 50, 50), width=1)
 
-        # Show sensor count if host
-        if mode == "host":
-            with lock:
-                count = len(sensor_data)
-            draw.text((10, 225), f"Sensors: {count}", font=font_small, fill=(0, 200, 100))
-        elif mode == "home":
-            draw.text((10, 225), "Idle - home network", font=font_small, fill=(100, 200, 100))
-    else:
-        draw.text((10, 100), "NO SENSOR", font=font_big, fill=(255, 0, 0))
+    # ── Helper: draw one sensor block ────────────────────────
+    def draw_sensor(label, pressure, y_top):
+        draw.text((6, y_top), label, font=f_tiny, fill=(150, 150, 150))
+
+        if pressure is None:
+            # Sensor not installed
+            draw.text((6, y_top + 16), "--", font=f_big, fill=(80, 80, 80))
+            draw.text((6, y_top + 65), "-- Pa  |  -- inWC", font=f_small, fill=(70, 70, 70))
+        else:
+            passed = pressure <= target
+            color  = (0, 230, 0) if passed else (255, 60, 60)
+            label2 = "PASS" if passed else "FAIL"
+            draw.text((185, y_top + 16), label2, font=f_med, fill=color)
+            draw.text((6,   y_top + 16), f"{pressure:.2f}", font=f_big, fill=color)
+            inwc = abs(pressure) / 249.0
+            draw.text((6,   y_top + 65), f"Pa  |  {inwc:.4f} inWC", font=f_small, fill=(180, 180, 180))
+
+        draw.line([(0, y_top + 85), (240, y_top + 85)], fill=(40, 40, 40), width=1)
+
+    # ── Sensor 1 (Inlet) — top half ─────────────────────────
+    draw_sensor("SENSOR 1  (Inlet)", p1,  28)
+
+    # ── Sensor 2 (Outlet) — bottom half ─────────────────────
+    draw_sensor("SENSOR 2  (Outlet)", p2, 118)
+
+    # ── Footer: target + mode info ───────────────────────────
+    tgt_inwc = abs(target) / 249.0
+    draw.text((6, 215), f"Target: {target:.1f} Pa  /  {tgt_inwc:.4f} inWC",
+              font=f_tiny, fill=(100, 100, 200))
+
+    if mode == "host":
+        with lock:
+            count = len(sensor_data)
+        draw.text((6, 234), f"Devices online: {count}", font=f_tiny, fill=(0, 180, 80))
+    elif mode == "client":
+        draw.text((6, 234), "Reporting to host", font=f_tiny, fill=(100, 180, 255))
+    elif mode == "home":
+        draw.text((6, 234), "Home network — idle", font=f_tiny, fill=(100, 200, 100))
+
+    draw.text((6, 254), f"http://{HOST_IP}", font=f_tiny, fill=(60, 60, 60))
 
     return image_to_pixels(img)
 
@@ -424,12 +459,12 @@ def screen_thread(board, splash):
     while True:
         with lock:
             is_active = active
-            p  = current_pressure
-            t  = current_temp
-            tgt = target_pressure
+            p1   = current_pressure1
+            p2   = current_pressure2
+            tgt  = target_pressure
             mode = wifi_mode
         if is_active:
-            screen_data = make_screen(p, t, tgt, mode)
+            screen_data = make_screen(p1, p2, tgt, mode)
             board.draw_image(0, 0, 240, 280, screen_data)
         time.sleep(1)
 
@@ -456,8 +491,8 @@ async def run_ble():
     await server.start()
     while True:
         with lock:
-            p = current_pressure
-        val = struct.pack('f', p)
+            p = current_pressure1
+        val = struct.pack('f', p if p is not None else 0.0)
         server.get_characteristic(PRESSURE_CHAR_UUID).value = val
         server.update_value(SERVICE_UUID, PRESSURE_CHAR_UUID)
         await asyncio.sleep(1)
@@ -506,20 +541,16 @@ splash = load_splash()
 if splash:
     board.draw_image(0, 0, 240, 280, splash)
 
-# WiFi setup — determines role
+# WiFi setup
 mode = setup_wifi()
 print(f"WiFi mode: {mode}")
 
 if mode == "host":
-    # Start web dashboard
     threading.Thread(target=run_web_server, daemon=True).start()
-
 elif mode == "client":
-    # Start sending data to host
     host_ip = get_host_ip()
     print(f"Reporting to host at {host_ip}")
     threading.Thread(target=report_data_loop, args=(host_ip,), daemon=True).start()
-
 elif mode == "home":
     print("Home network — idle, ready for updates")
 
@@ -529,22 +560,31 @@ threading.Thread(target=start_ble, daemon=True).start()
 # Screen always runs
 threading.Thread(target=screen_thread, args=(board, splash), daemon=True).start()
 
-# Sensor loop — always reads, host also logs its own data to dashboard
+# ── Sensor loop ───────────────────────────────────────────────
 with SMBus(1) as bus:
     init_sensor(bus)
     while True:
-        pressure, temperature = read_pressure(bus)
-        if pressure is not None:
+        p1, t1 = read_sdp(bus, SDP_ADDR_1)
+        p2, t2 = read_sdp(bus, SDP_ADDR_2)
+
+        with lock:
+            current_pressure1 = p1
+            current_temp1     = t1
+            current_pressure2 = p2
+            current_temp2     = t2
+
+        # Host logs its own data into the dashboard
+        if mode == "host":
             with lock:
-                current_pressure = pressure
-                current_temp     = temperature
-            # Host logs its own data into the dashboard
-            if mode == "host":
-                with lock:
-                    sensor_data[DEVICE_NAME] = {
-                        'pressure': pressure,
-                        'temp':     temperature,
-                        'time':     time.time()
-                    }
-            print(f"Pressure: {pressure:.2f} Pa  Temp: {temperature:.1f} C  Mode: {mode}")
+                sensor_data[DEVICE_NAME] = {
+                    's1':    p1,
+                    's2':    p2,
+                    'temp1': t1,
+                    'temp2': t2,
+                    'time':  time.time()
+                }
+
+        s1_str = f"{p1:.2f} Pa" if p1 is not None else "--"
+        s2_str = f"{p2:.2f} Pa" if p2 is not None else "--"
+        print(f"S1: {s1_str}  S2: {s2_str}  Mode: {mode}")
         time.sleep(1)
