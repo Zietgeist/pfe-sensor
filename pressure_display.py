@@ -456,6 +456,7 @@ def make_screen(p1, p2, target, mode):
 def screen_thread(board, splash):
     if splash:
         board.draw_image(0, 0, 240, 280, splash)
+    last = (None, None, None, None)
     while True:
         with lock:
             is_active = active
@@ -463,11 +464,14 @@ def screen_thread(board, splash):
             p2   = current_pressure2
             tgt  = target_pressure
             mode = wifi_mode
-        if is_active:
+        current = (round(p1, 2) if p1 else None,
+                   round(p2, 2) if p2 else None,
+                   tgt, mode)
+        if is_active and current != last:
             screen_data = make_screen(p1, p2, tgt, mode)
             board.draw_image(0, 0, 240, 280, screen_data)
+            last = current
         time.sleep(1)
-
 
 # =============================================================
 # BLE
