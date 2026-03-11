@@ -1,0 +1,14 @@
+[Unit]
+Description=PFE Sensor — auto-update and run
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/bin/bash /home/ivan/pfe-sensor/update_and_run.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
