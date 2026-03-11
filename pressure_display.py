@@ -366,7 +366,7 @@ def read_sdp(bus, address):
 
 def load_splash():
     try:
-        img = Image.open('/home/ivan/marten_screen.png').convert('RGB')
+        img = Image.open('/home/ivan/pfe-sensor/marten_screen.png').convert('RGB')
         return image_to_pixels(img)
     except Exception as e:
         print(f"Splash load error: {e}")
