@@ -554,8 +554,8 @@ elif mode == "client":
 elif mode == "home":
     print("Home network — idle, ready for updates")
 
-# BLE always runs
-threading.Thread(target=start_ble, daemon=True).start()
+# BLE disabled for now
+# threading.Thread(target=start_ble, daemon=True).start()
 
 # Screen always runs
 threading.Thread(target=screen_thread, args=(board, splash), daemon=True).start()
