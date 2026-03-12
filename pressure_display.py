@@ -211,14 +211,15 @@ def build_dashboard_html():
   <title>PFE Sensor Dashboard</title>
   <style>
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-    body {{ font-family: Arial, sans-serif; background: #111; color: #eee; padding: 20px; }}
+    body {{ font-family: Arial, sans-serif;  background: #111; color: #fff; padding: 20px; }}
     h1 {{ color: #6af; text-align: center; margin-bottom: 4px; font-size: 1.6em; }}
     .subtitle {{ text-align: center; color: #555; font-size: 0.85em; margin-bottom: 24px; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; max-width: 1100px; margin: 0 auto; }}
-    .device-card {{ background: #1a1a1a; border-radius: 14px; padding: 18px; border: 2px solid #333; }}
-    .device-card.pass {{ border-color: #0c0; }}
-    .device-card.fail {{ border-color: #f44; }}
-    .device-card.stale {{ border-color: #444; opacity: 0.5; }}
+    .device-card {{ background: #222; border: 2px solid #444; border-radius: 14px; padding: 18px; }}
+    .sensor-box {{ background: #2a2a2a; border-radius: 10px; padding: 12px; text-align: center; }}
+    .sensor-label {{ font-size: 0.75em; color: #aaa; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }}
+    .sensor-value {{ font-size: 1.9em; font-weight: bold; color: #fff; }}
+    .sensor-inwc {{ font-size: 0.75em; color: #aaa; margin-top: 3px; }}
+    .badge-stale {{ background: #555; color: #ccc; }}
     .device-name {{ font-size: 1.1em; font-weight: bold; color: #adf; margin-bottom: 14px; display: flex; justify-content: space-between; }}
     .status-badge {{ font-size: 0.8em; padding: 2px 10px; border-radius: 20px; font-weight: bold; }}
     .badge-pass {{ background: #0a3; color: #fff; }}
@@ -257,7 +258,7 @@ def build_dashboard_html():
         if (!names.length) {{ grid.innerHTML = '<div class="no-sensors">Waiting for sensors...</div>'; return; }}
         grid.innerHTML = names.map(name => {{
           const s = data[name];
-          const stale = (now - s.time) > 10;
+          const stale = (now - s.time) > 30;
           const bothPass = !stale && (s.s1 !== null && s.s1 <= TARGET) && (s.s2 === null || s.s2 <= TARGET);
           const anyFail  = !stale && ((s.s1 !== null && s.s1 > TARGET) || (s.s2 !== null && s.s2 > TARGET));
           const cls = stale ? 'stale' : (bothPass ? 'pass' : (anyFail ? 'fail' : ''));
