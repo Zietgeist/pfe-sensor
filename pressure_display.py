@@ -110,7 +110,7 @@ def create_hotspot():
 def get_host_ip():
     try:
         result = subprocess.run(
-            ['ip', 'route', 'show', 'dev', 'wlan0'],
+            ['ip', 'route', 'show', 'default', 'dev', 'wlan0'],
             capture_output=True, text=True
         )
         for line in result.stdout.splitlines():
