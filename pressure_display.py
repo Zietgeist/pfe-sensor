@@ -417,29 +417,26 @@ def make_screen(p1, p2, target, mode):
         if pressure is None:
             # Sensor not installed
             draw.text((6, y_top + 16), "--", font=f_big, fill=(80, 80, 80))
-            draw.text((6, y_top + 65), "-- Pa  |  -- inWC", font=f_small, fill=(70, 70, 70))
+            
         else:
             passed = pressure <= target
             color  = (0, 230, 0) if passed else (255, 60, 60)
             label2 = "PASS" if passed else "FAIL"
             draw.text((185, y_top + 16), label2, font=f_med, fill=color)
             draw.text((6,   y_top + 16), f"{pressure:.2f}", font=f_big, fill=color)
-            inwc = abs(pressure) / 249.0
-            draw.text((6,   y_top + 65), f"Pa  |  {inwc:.4f} inWC", font=f_small, fill=(180, 180, 180))
+            draw.text((6,   y_top + 65), "Pa", font=f_small, fill=(180, 180, 180))
 
         draw.line([(0, y_top + 85), (240, y_top + 85)], fill=(40, 40, 40), width=1)
 
     # ── Sensor 1 (Inlet) — top half ─────────────────────────
-    draw_sensor("SENSOR 1  (Inlet)", p1,  28)
+    draw_sensor("SENSOR 1 ", p1,  28)
 
     # ── Sensor 2 (Outlet) — bottom half ─────────────────────
-    draw_sensor("SENSOR 2  (Outlet)", p2, 118)
+    draw_sensor("SENSOR 2 ", p2, 118)
 
     # ── Footer: target + mode info ───────────────────────────
-    tgt_inwc = abs(target) / 249.0
-    draw.text((6, 215), f"Target: {target:.1f} Pa  /  {tgt_inwc:.4f} inWC",
-              font=f_tiny, fill=(100, 100, 200))
-
+    
+    draw.text((6, 215), f"Target: {target:.1f} Pa", font=f_tiny, fill=(100, 100, 200))
     if mode == "host":
         with lock:
             count = len(sensor_data)
@@ -449,8 +446,7 @@ def make_screen(p1, p2, target, mode):
     elif mode == "home":
         draw.text((6, 234), "Home network — idle", font=f_tiny, fill=(100, 200, 100))
 
-    draw.text((6, 254), f"http://{HOST_IP}", font=f_tiny, fill=(60, 60, 60))
-
+    draw.text((6, 254), f"http://{get_host_ip()}", font=f_tiny, fill=(60, 60, 60))
     return image_to_pixels(img)
 
 def screen_thread(board, splash):
