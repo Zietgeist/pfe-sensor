@@ -46,7 +46,7 @@ TARGET_PRESSURE    = -12.5   # Pa — adjust as needed
 
 # --- Shared state ---
 lock              = threading.Lock()
-active            = False
+active            = True
 current_pressure1 = None   # Sensor 1 (0x25)
 current_temp1     = None
 current_pressure2 = None   # Sensor 2 (0x26)
