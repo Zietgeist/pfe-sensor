@@ -210,29 +210,28 @@ def build_dashboard_html():
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PFE Sensor Dashboard</title>
   <style>
-    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-    body {{ font-family: Arial, sans-serif;  background: #111; color: #fff; padding: 20px; }}
+* {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{ font-family: Arial, sans-serif; background: #111; color: #fff; padding: 20px; }}
     h1 {{ color: #6af; text-align: center; margin-bottom: 4px; font-size: 1.6em; }}
-    .subtitle {{ text-align: center; color: #555; font-size: 0.85em; margin-bottom: 24px; }}
-    .device-card {{ background: #222; border: 2px solid #444; border-radius: 14px; padding: 18px; }}
-    .sensor-box {{ background: #2a2a2a; border-radius: 10px; padding: 12px; text-align: center; }}
-    .sensor-label {{ font-size: 0.75em; color: #aaa; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }}
-    .sensor-value {{ font-size: 1.9em; font-weight: bold; color: #fff; }}
-    .sensor-inwc {{ font-size: 0.75em; color: #aaa; margin-top: 3px; }}
-    .badge-stale {{ background: #555; color: #ccc; }}
+    .subtitle {{ text-align: center; color: #aaa; font-size: 0.85em; margin-bottom: 24px; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; max-width: 1100px; margin: 0 auto; }}
+    .device-card {{ background: #222; border-radius: 14px; padding: 18px; border: 2px solid #444; }}
+    .device-card.pass {{ border-color: #0c0; }}
+    .device-card.fail {{ border-color: #f44; }}
+    .device-card.stale {{ border-color: #444; opacity: 0.6; }}
     .device-name {{ font-size: 1.1em; font-weight: bold; color: #adf; margin-bottom: 14px; display: flex; justify-content: space-between; }}
     .status-badge {{ font-size: 0.8em; padding: 2px 10px; border-radius: 20px; font-weight: bold; }}
     .badge-pass {{ background: #0a3; color: #fff; }}
     .badge-fail {{ background: #933; color: #fff; }}
-    .badge-stale {{ background: #333; color: #777; }}
+    .badge-stale {{ background: #555; color: #ccc; }}
     .sensors {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
-    .sensor-box {{ background: #222; border-radius: 10px; padding: 12px; text-align: center; }}
-    .sensor-label {{ font-size: 0.75em; color: #888; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }}
-    .sensor-value {{ font-size: 1.9em; font-weight: bold; }}
-    .sensor-inwc {{ font-size: 0.75em; color: #777; margin-top: 3px; }}
-    .sensor-na {{ font-size: 1.4em; color: #444; }}
-    #footer {{ text-align: center; color: #444; font-size: 0.8em; margin-top: 24px; }}
-    .no-sensors {{ text-align:center; color:#555; margin-top:60px; font-size:1.1em; grid-column:1/-1; }}
+    .sensor-box {{ background: #2a2a2a; border-radius: 10px; padding: 12px; text-align: center; }}
+    .sensor-label {{ font-size: 0.75em; color: #aaa; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }}
+    .sensor-value {{ font-size: 1.9em; font-weight: bold; color: #fff; }}
+    .sensor-inwc {{ font-size: 0.75em; color: #aaa; margin-top: 3px; }}
+    .sensor-na {{ font-size: 1.4em; color: #aaa; }}
+    #footer {{ text-align: center; color: #aaa; font-size: 0.8em; margin-top: 24px; }}
+    .no-sensors {{ text-align: center; color: #aaa; margin-top: 60px; font-size: 1.1em; grid-column: 1/-1; }}
   </style>
 </head>
 <body>
