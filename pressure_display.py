@@ -492,12 +492,14 @@ board = WhisPlayBoard()
 board.set_backlight(80)
 board.on_button_press(button_pressed)
 
-# Screen always runs
-threading.Thread(target=screen_thread, args=(board, splash), daemon=True).start()
+
 
 splash = load_splash()
 if splash:
     board.draw_image(0, 0, 240, 280, splash)
+
+# Screen always runs
+threading.Thread(target=screen_thread, args=(board, splash), daemon=True).start()
 
 # WiFi setup
 mode = setup_wifi()
