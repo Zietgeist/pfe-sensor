@@ -22,7 +22,7 @@ from urllib.request import urlopen, Request
 from urllib.error import URLError
 from smbus2 import SMBus, i2c_msg
 from PIL import Image, ImageDraw, ImageFont
-from bless import BlessServer, BlessGATTCharacteristic, GATTCharacteristicProperties, GATTAttributePermissions
+
 
 sys.path.append('/home/ivan/Whisplay/Driver')
 from WhisPlay import WhisPlayBoard
@@ -31,9 +31,6 @@ from WhisPlay import WhisPlayBoard
 DEVICE_NAME        = os.uname().nodename
 SDP_ADDR_1         = 0x25   # Sensor 1 (inlet)
 SDP_ADDR_2         = 0x26   # Sensor 2 (outlet)
-SERVICE_UUID       = "12345678-1234-5678-1234-56789abcdef0"
-PRESSURE_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1"
-TARGET_CHAR_UUID   = "12345678-1234-5678-1234-56789abcdef2"
 
 HOME_SSID          = "PFE-home"
 HOME_PASSWORD      = "pferadon1"
