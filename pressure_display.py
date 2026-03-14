@@ -24,7 +24,7 @@ from smbus2 import SMBus, i2c_msg
 from PIL import Image, ImageDraw, ImageFont
 
 
-sys.path.append('/home/ivan/Whisplay/Driver')
+sys.path.append('/home/pi/Whisplay/Driver')
 from WhisPlay import WhisPlayBoard
 
 # --- Constants ---
@@ -364,7 +364,7 @@ def read_sdp(bus, address):
 
 def load_splash():
     try:
-        img = Image.open('/home/ivan/pfe-sensor/marten_screen.png').convert('RGB')
+        img = Image.open('/home/pi/pfe-sensor/marten_screen.png').convert('RGB')
         return image_to_pixels(img)
     except Exception as e:
         print(f"Splash load error: {e}")
