@@ -467,49 +467,6 @@ def screen_thread(board, splash):
             last = current
         time.sleep(1)
 
-# =============================================================
-# BLE
-# =============================================================
-
-async def run_ble():
-    server = BlessServer(name=DEVICE_NAME)
-    server.read_request_func  = handle_read
-    server.write_request_func = handle_write
-    await server.add_new_service(SERVICE_UUID)
-    await server.add_new_characteristic(
-        SERVICE_UUID, PRESSURE_CHAR_UUID,
-        GATTCharacteristicProperties.read | GATTCharacteristicProperties.notify,
-        None, GATTAttributePermissions.readable
-    )
-    await server.add_new_characteristic(
-        SERVICE_UUID, TARGET_CHAR_UUID,
-        GATTCharacteristicProperties.read | GATTCharacteristicProperties.write,
-        None, GATTAttributePermissions.readable | GATTAttributePermissions.writeable
-    )
-    await server.start()
-    while True:
-        with lock:
-            p = current_pressure1
-        val = struct.pack('f', p if p is not None else 0.0)
-        server.get_characteristic(PRESSURE_CHAR_UUID).value = val
-        server.update_value(SERVICE_UUID, PRESSURE_CHAR_UUID)
-        await asyncio.sleep(1)
-
-def handle_read(characteristic, **kwargs):
-    return characteristic.value
-
-def handle_write(characteristic, value, **kwargs):
-    global target_pressure
-    if characteristic.uuid == TARGET_CHAR_UUID:
-        with lock:
-            target_pressure = struct.unpack('f', bytes(value))[0]
-        print(f"New target: {target_pressure:.2f} Pa")
-
-def start_ble():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(run_ble())
-
 
 # =============================================================
 # Button
@@ -551,9 +508,6 @@ elif mode == "client":
     threading.Thread(target=report_data_loop, args=(host_ip,), daemon=True).start()
 elif mode == "home":
     print("Home network — idle, ready for updates")
-
-# BLE disabled for now
-# threading.Thread(target=start_ble, daemon=True).start()
 
 # Screen always runs
 threading.Thread(target=screen_thread, args=(board, splash), daemon=True).start()
