@@ -444,7 +444,7 @@ def make_screen(p1, p2, target, mode):
     elif mode == "home":
         draw.text((6, 234), "Home network — idle", font=f_tiny, fill=(100, 200, 100))
 
-    draw.text((6, 254), f"http://{get_host_ip()}", font=f_tiny, fill=(60, 60, 60))
+    draw.text((6, 254), f"http://{get_host_ip()}", font=f_tiny, fill=(100, 180, 255))
     return image_to_pixels(img)
 
 def screen_thread(board, splash):
