@@ -293,9 +293,12 @@ h1 {{ color: #e8edf5; text-align: center; margin-bottom: 4px; font-size: 1.5em; 
 </body>
 </html>"""
 def run_web_server():
-    server = HTTPServer(('0.0.0.0', WEB_PORT), DashboardHandler)
-    print(f"Dashboard running at http://{HOST_IP}")
-    server.serve_forever()
+    try:
+        server = HTTPServer(('0.0.0.0', WEB_PORT), DashboardHandler)
+        print(f"Web server started on port {WEB_PORT}")
+        server.serve_forever()
+    except Exception as e:
+        print(f"Web server error: {e}")
 
 
 # =============================================================
