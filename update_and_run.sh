@@ -12,6 +12,7 @@ if [ ! -d "$REPO_DIR" ]; then
 fi
 
 cd "$REPO_DIR"
+chown -R pi:pi $REPO_DIR
 git fetch origin main >> "$LOG" 2>&1
 git reset --hard origin/main >> "$LOG" 2>&1
 echo "Code updated." >> "$LOG"
