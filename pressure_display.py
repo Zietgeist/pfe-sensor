@@ -106,17 +106,17 @@ def create_hotspot():
 
 def get_host_ip():
     try:
+        # Get the actual IP assigned to wlan0 right now
         result = subprocess.run(
-            ['ip', 'route', 'show', 'default', 'dev', 'wlan0'],
+            ['ip', '-4', 'addr', 'show', 'wlan0'],
             capture_output=True, text=True
         )
         for line in result.stdout.splitlines():
-            if 'default' in line:
-                return line.split()[2]
+            if 'inet ' in line:
+                return line.strip().split()[1].split('/')[0]
     except Exception:
         pass
-    return HOST_IP
-
+    return None
 def setup_wifi():
     global wifi_mode
 
@@ -444,8 +444,11 @@ def make_screen(p1, p2, target, mode):
     elif mode == "home":
         draw.text((6, 234), "Home network — idle", font=f_tiny, fill=(100, 200, 100))
 
-    draw.text((6, 254), f"http://{get_host_ip()}", font=f_tiny, fill=(100, 180, 255))
-    return image_to_pixels(img)
+    ip = get_host_ip()
+    if ip:
+        draw.text((6, 254), f"http://{ip}", font=f_tiny, fill=(100, 180, 255))
+    else:
+        draw.text((6, 254), "...", font=f_tiny, fill=(160, 160, 160))
 
 def screen_thread(board, splash):
     if splash:
