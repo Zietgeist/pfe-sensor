@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-ExecStart=/bin/bash /home/ivan/pfe-sensor/update_and_run.sh
+ExecStart=/bin/bash /home/pi/pfe-sensor/update_and_run.sh
 Restart=on-failure
 RestartSec=10
 
