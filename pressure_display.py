@@ -706,7 +706,7 @@ def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
 def screen_thread(board, splash):
     if splash:
         board.draw_image(0, 0, 240, 280, splash)
-    last_pixels = None
+    last_state = None
 
     while True:
         with lock:
@@ -719,22 +719,29 @@ def screen_thread(board, splash):
             tgt2   = target2
             mode   = wifi_mode
             zc     = zone_clicks
-            tc     = current_temp1   # use sensor 1 temp for display
+            batt   = current_battery
 
         if not is_active:
             time.sleep(0.5)
             continue
 
-        if stage == "running":
-            pixels = make_screen_running(p1, p2, t1, tgt1, tgt2, mode)
-        else:
-            pixels = make_screen_boot(stage, tc, climate_zone, zc)
+        # Only redraw when something meaningful actually changed
+        p1r = round(p1, 1) if p1 is not None else None
+        p2r = round(p2, 1) if p2 is not None else None
+        t1r = round(t1, 1) if t1 is not None else None
+        br  = round(batt)  if batt is not None else None
+        state = (stage, p1r, p2r, t1r, tgt1, tgt2, mode, zc, br)
 
-        if pixels != last_pixels:
+        if state != last_state:
+            if stage == "running":
+                pixels = make_screen_running(p1, p2, t1, tgt1, tgt2, mode)
+            else:
+                pixels = make_screen_boot(stage, t1, climate_zone, zc)
             board.draw_image(0, 0, 240, 280, pixels)
-            last_pixels = pixels
+            last_state = state
 
         time.sleep(0.5)
+
 
 
 # =============================================================
