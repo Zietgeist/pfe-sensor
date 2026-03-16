@@ -21,6 +21,7 @@ import time
 import random
 import threading
 import subprocess
+import socket
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.request import urlopen, Request
@@ -209,6 +210,72 @@ sensor_data = {}   # host only: { "PFE-1": { s1, s2, t1, t2, tgt1, tgt2, time } 
 
 # Screen on/off
 active = True
+
+# Battery
+current_battery = None   # 0.0–100.0 or None if unreadable
+
+
+# =============================================================
+# Battery (PiSugar 3)
+# =============================================================
+
+def read_battery():
+    """Read battery % from PiSugar 3 server. Returns float 0–100 or None."""
+    try:
+        s = socket.socket()
+        s.settimeout(1)
+        s.connect(('127.0.0.1', 8423))
+        s.send(b'get battery\n')
+        data = s.recv(64).decode().strip()
+        s.close()
+        # Response: "battery: 80.45"
+        return float(data.split(':')[1].strip())
+    except Exception:
+        return None
+
+def battery_poll_loop():
+    """Update battery reading every 30 seconds."""
+    global current_battery
+    while True:
+        val = read_battery()
+        with lock:
+            current_battery = val
+        time.sleep(30)
+
+def draw_battery_bar(draw, pct):
+    """
+    Draw a 2px wide battery bar on the right edge of the screen (x=238–239).
+    Full height = 280px. Green top → yellow middle → red bottom.
+    Filled from top down based on charge level.
+    If pct is None, draw a dim gray bar.
+    """
+    BAR_X     = 238
+    BAR_W     = 2
+    BAR_H     = 280
+
+    if pct is None:
+        draw.rectangle([BAR_X, 0, BAR_X + BAR_W - 1, BAR_H - 1], fill=(40, 40, 40))
+        return
+
+    pct = max(0.0, min(100.0, pct))
+    filled = int(BAR_H * pct / 100.0)   # pixels filled from top
+
+    # Draw filled portion with color gradient: green→yellow→red top to bottom
+    for y in range(filled):
+        ratio = y / BAR_H   # 0 at top, 1 at bottom
+        if ratio < 0.5:
+            # Green → Yellow
+            r = int(255 * (ratio * 2))
+            g = 200
+        else:
+            # Yellow → Red
+            r = 255
+            g = int(200 * (1 - (ratio - 0.5) * 2))
+        draw.line([(BAR_X, y), (BAR_X + BAR_W - 1, y)], fill=(r, g, 0))
+
+    # Draw empty portion (dim)
+    if filled < BAR_H:
+        draw.rectangle([BAR_X, filled, BAR_X + BAR_W - 1, BAR_H - 1], fill=(30, 30, 30))
 
 
 # =============================================================
@@ -517,6 +584,10 @@ def make_screen_boot(stage, temp_c, zone, zone_clicks_count):
         draw.text((10, 145), "and tubes are placed", font=f_small, fill=(255, 180, 50))
         draw.text((10, 200), "Press button to lock", font=f_tiny, fill=(180, 180, 80))
 
+    with lock:
+        batt = current_battery
+    draw_battery_bar(draw, batt)
+
     return image_to_pixels(img)
 
 def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
@@ -587,6 +658,10 @@ def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
     ip = get_host_ip()
     draw.text((6, 254), f"http://{ip}" if ip else "...",
               font=f_tiny, fill=(100,180,255) if ip else (160,160,160))
+
+    with lock:
+        batt = current_battery
+    draw_battery_bar(draw, batt)
 
     return image_to_pixels(img)
 
@@ -851,6 +926,9 @@ if splash:
 
 # Start screen thread immediately
 threading.Thread(target=screen_thread, args=(board, None), daemon=True).start()
+
+# Start battery polling
+threading.Thread(target=battery_poll_loop, daemon=True).start()
 
 # WiFi in background so boot sequence can proceed in parallel
 threading.Thread(target=lambda: (
