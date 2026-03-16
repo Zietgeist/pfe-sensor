@@ -8,8 +8,13 @@ Same code runs on every device.
 
 Boot sequence:
   1. Zero both sensors (rapid averaging)
-  2. Confirm outdoor temp from SDP800 thermometer
-  3. Pick climate zone (1/2/3 clicks, default Moderate)
+  2. Pick outdoor temp:
+       1 click + wait 3s → auto-read from thermometer
+       2 clicks           → T < -4°F
+       3 clicks           → -4°F to 14°F
+       4 clicks           → 14°F to 32°F
+       5 clicks           → > 32°F
+  3. Pick climate zone (1/2/3 clicks + wait 3s, default Moderate)
   4. One click locks both sensor baselines
   5. Targets calculated per sensor from zone + temp + baseline
   6. Blue fields if target unknown, green/red once calibrated
@@ -47,47 +52,73 @@ SITE_PASSWORD = "pferadon1"
 HOST_IP       = "192.168.4.1"
 WEB_PORT      = 80
 
-# Climate zones
 ZONE_MILD     = "mild"
 ZONE_MODERATE = "moderate"
 ZONE_SEVERE   = "severe"
-DEFAULT_ZONE  = ZONE_MODERATE   # Colorado default
+DEFAULT_ZONE  = ZONE_MODERATE
 
-# Button timing
-HOLD_SECONDS  = 2.0   # hold duration to re-enter setup
+HOLD_SECONDS  = 2.0
+ZERO_SAMPLES  = 50
+CLICK_TIMEOUT = 3.0   # seconds of silence before clicks are processed
 
-# Zero-calibration
-ZERO_SAMPLES  = 50    # number of readings to average for zero offset
+# Temp band click map:
+#   1 click + wait → auto (read thermometer)
+#   2 clicks       → < -4°F
+#   3 clicks       → -4 to 14°F
+#   4 clicks       → 14 to 32°F
+#   5 clicks       → > 32°F
+TEMP_CLICK_BANDS = {
+    1: "auto",
+    2: "<-4",
+    3: "14to-4",
+    4: "32to14",
+    5: ">32",
+}
+
+TEMP_BAND_LABELS = {
+    "auto":   "AUTO (thermometer)",
+    "<-4":    "< -4°F",
+    "14to-4": "-4°F to 14°F",
+    "32to14": "14°F to 32°F",
+    ">32":    "> 32°F",
+}
+
+# Representative mid-point °F for each band (used for table lookup)
+TEMP_BAND_MIDPOINT_F = {
+    "<-4":    -10.0,
+    "14to-4":   5.0,
+    "32to14":  23.0,
+    ">32":     50.0,
+}
 
 # =============================================================
 # Target pressure lookup tables
-# Indexed by round(baseline * 10) so 0.5 Pa → key 5
-# Four temp bands per zone: ">32", "32to14", "14to-4", "<-4"
-# Baseline range: 0.0 to 6.0 Pa in 0.1 steps
 # =============================================================
 
 def _build_mild():
-    # >32°F: target = -baseline (1:1)
-    # 32–14°F: target = -baseline * 0.4 (approx, rounded to 0.1)
-    # 14 to -4°F and below: 0.0
+    gt32 = [0.0,-0.1,-0.2,-0.3,-0.4,-0.5,-0.6,-0.7,-0.8,-0.9,-1.0,
+            -1.1,-1.2,-1.3,-1.4,-1.5,-1.6,-1.7,-1.8,-1.9,-2.0,-2.1,
+            -2.2,-2.3,-2.4,-2.5,-2.6,-2.7,-2.8,-2.9,-3.0,-3.1,-3.2,
+            -3.3,-3.4,-3.5,-3.6,-3.7,-3.8,-3.9,-4.0,-4.1,-4.2,-4.3,
+            -4.4,-4.5,-4.6,-4.7,-4.8,-4.9,-5.0,-5.1,-5.2,-5.3,-5.4,
+            -5.5,-5.6,-5.7,-5.8,-5.9,-6.0]
+    t32_14 = [0.0,-0.1,-0.1,-0.2,-0.2,-0.2,-0.3,-0.3,-0.4,-0.4,-0.4,
+              -0.5,-0.5,-0.6,-0.6,-0.6,-0.7,-0.7,-0.8,-0.8,-0.8,-0.9,
+              -0.9,-1.0,-1.0,-1.0,-1.1,-1.1,-1.2,-1.2,-1.2,-1.3,-1.3,
+              -1.4,-1.4,-1.4,-1.5,-1.5,-1.6,-1.6,-1.6,-1.7,-1.7,-1.8,
+              -1.8,-1.8,-1.9,-1.9,-2.0,-2.0,-2.0,-2.1,-2.1,-2.2,-2.2,
+              -2.2,-2.3,-2.3,-2.4,-2.4,-2.4]
     data = {}
-    for i in range(61):   # 0 to 6.0 in 0.1 steps
-        b = round(i * 0.1, 1)
+    for i in range(61):
         data[i] = {
-            ">32":    round(-b, 1),
-            "32to14": round(-b * 0.4, 1),
+            ">32":    gt32[i],
+            "32to14": t32_14[i],
             "14to-4": 0.0,
             "<-4":    0.0,
         }
     return data
 
 def _build_moderate():
-    # >32°F: target = -baseline * 1.2 (approx from table)
-    # 32–14°F: target = -baseline * 0.5
-    # 14 to -4°F: 0.0
-    # <-4°F: 0.0
-    # Using exact table values for key points, interpolating between
-    # Exact values from PDF:
     gt32 = [0.0,-0.2,-0.3,-0.4,-0.5,-0.6,-0.8,-0.9,-1.0,-1.1,-1.2,
             -1.4,-1.5,-1.6,-1.7,-1.8,-2.0,-2.1,-2.2,-2.3,-2.4,-2.6,
             -2.7,-2.8,-2.9,-3.0,-3.2,-3.3,-3.4,-3.5,-3.6,-3.8,-3.9,
@@ -111,7 +142,6 @@ def _build_moderate():
     return data
 
 def _build_severe():
-    # Exact values from PDF
     gt32 = [0.0,-0.2,-0.3,-0.5,-0.6,-0.8,-0.9,-1.1,-1.2,-1.4,-1.5,
             -1.7,-1.8,-2.0,-2.1,-2.3,-2.4,-2.6,-2.7,-2.9,-3.0,-3.2,
             -3.3,-3.5,-3.6,-3.8,-3.9,-4.1,-4.2,-4.4,-4.5,-4.7,-4.8,
@@ -146,8 +176,8 @@ TABLES = {
     ZONE_SEVERE:   _build_severe(),
 }
 
-def temp_band(temp_f):
-    """Return the temperature band string for a given °F value."""
+def temp_band_from_f(temp_f):
+    """Return the table key for a given °F value."""
     if temp_f > 32:
         return ">32"
     elif temp_f >= 14:
@@ -159,16 +189,15 @@ def temp_band(temp_f):
 
 def lookup_target(zone, temp_f, baseline_pa):
     """
-    Look up minimum target pressure from table.
-    baseline_pa: the pre-fan reading (positive Pa, e.g. +0.5)
-    Returns target Pa (negative) or None if inputs invalid.
+    Look up minimum target pressure.
+    baseline_pa: positive Pa reading pre-fan.
+    Returns negative Pa target, or None.
     """
     try:
         table = TABLES[zone]
-        band  = temp_band(temp_f)
-        # Round baseline to nearest 0.1, clamp 0–6
-        b = max(0.0, min(6.0, baseline_pa))
-        key = round(round(b * 10) )   # integer key 0–60
+        band  = temp_band_from_f(temp_f)
+        b     = max(0.0, min(6.0, baseline_pa))
+        key   = round(round(b * 10))
         return table[key][band]
     except Exception:
         return None
@@ -180,47 +209,50 @@ def lookup_target(zone, temp_f, baseline_pa):
 
 lock = threading.Lock()
 
-# Live sensor readings
 current_pressure1 = None
 current_temp1     = None
 current_pressure2 = None
 current_temp2     = None
 
-# Zero offsets applied at boot
 zero_offset1 = 0.0
 zero_offset2 = 0.0
 
-# Boot/calibration state
-# Stages: "zeroing" | "confirm_temp" | "pick_zone" | "lock_baseline" | "running"
-boot_stage     = "zeroing"
-outdoor_temp_f = None       # confirmed outdoor temp in °F
-climate_zone   = DEFAULT_ZONE
-zone_clicks    = 0          # how many clicks received in pick_zone stage
+# Boot stages: "zeroing" | "pick_temp" | "pick_zone" | "lock_baseline" | "running"
+boot_stage  = "zeroing"
+
+# Temperature selection state
+temp_clicks      = 0          # clicks received in pick_temp stage
+temp_band_choice = None       # chosen band string e.g. ">32" or "auto"
+outdoor_temp_f   = None       # resolved °F value used for table lookup
+
+# Zone selection state
+climate_zone = DEFAULT_ZONE
+zone_clicks  = 0
 
 # Per-sensor calibration
-baseline1      = None       # locked baseline Pa for sensor 1
-baseline2      = None       # locked baseline Pa for sensor 2
-target1        = None       # calculated target Pa for sensor 1
-target2        = None       # calculated target Pa for sensor 2
+baseline1 = None
+baseline2 = None
+target1   = None
+target2   = None
 
-# WiFi / host state
-wifi_mode  = "searching"
-is_host    = False
-sensor_data = {}   # host only: { "PFE-1": { s1, s2, t1, t2, tgt1, tgt2, time } }
+# WiFi
+wifi_mode   = "searching"
+is_host     = False
+sensor_data = {}
 
-# Screen on/off
-active = True
+active          = True
+current_battery = None
 
-# Battery
-current_battery = None   # 0.0–100.0 or None if unreadable
+# Timers for click-timeout detection
+_temp_click_timer = None
+_zone_click_timer = None
 
 
 # =============================================================
-# Battery (PiSugar 3)
+# Battery
 # =============================================================
 
 def read_battery():
-    """Read battery % from PiSugar 3 server. Returns float 0–100 or None."""
     try:
         s = socket.socket()
         s.settimeout(1)
@@ -228,13 +260,11 @@ def read_battery():
         s.send(b'get battery\n')
         data = s.recv(64).decode().strip()
         s.close()
-        # Response: "battery: 80.45"
         return float(data.split(':')[1].strip())
     except Exception:
         return None
 
 def battery_poll_loop():
-    """Update battery reading every 30 seconds."""
     global current_battery
     while True:
         val = read_battery()
@@ -243,43 +273,27 @@ def battery_poll_loop():
         time.sleep(30)
 
 def draw_battery_bar(draw, pct):
-    """
-    Draw a 2px wide battery bar on the right edge of the screen (x=238–239).
-    Full height = 280px. Green top → yellow middle → red bottom.
-    Filled from top down based on charge level.
-    If pct is None, draw a dim gray bar.
-    """
-    BAR_X     = 238
-    BAR_W     = 2
-    BAR_H     = 280
-
+    BAR_X = 238
+    BAR_W = 2
+    BAR_H = 280
     if pct is None:
         draw.rectangle([BAR_X, 0, BAR_X + BAR_W - 1, BAR_H - 1], fill=(40, 40, 40))
         return
-
-    pct = max(0.0, min(100.0, pct))
-    filled = int(BAR_H * pct / 100.0)   # pixels filled from top
-
-    # Draw filled portion with color gradient: green→yellow→red top to bottom
+    pct    = max(0.0, min(100.0, pct))
+    filled = int(BAR_H * pct / 100.0)
     for y in range(filled):
-        ratio = y / BAR_H   # 0 at top, 1 at bottom
+        ratio = y / BAR_H
         if ratio < 0.5:
-            # Green → Yellow
-            r = int(255 * (ratio * 2))
-            g = 200
+            r = int(255 * (ratio * 2)); g = 200
         else:
-            # Yellow → Red
-            r = 255
-            g = int(200 * (1 - (ratio - 0.5) * 2))
+            r = 255; g = int(200 * (1 - (ratio - 0.5) * 2))
         draw.line([(BAR_X, y), (BAR_X + BAR_W - 1, y)], fill=(r, g, 0))
-
-    # Draw empty portion (dim)
     if filled < BAR_H:
         draw.rectangle([BAR_X, filled, BAR_X + BAR_W - 1, BAR_H - 1], fill=(30, 30, 30))
 
 
 # =============================================================
-# WiFi (unchanged from original)
+# WiFi
 # =============================================================
 
 def scan_for(ssid, retries=2):
@@ -331,7 +345,6 @@ def get_host_ip():
     return None
 
 def already_connected_to():
-    """Return the SSID we are currently connected to, or None."""
     try:
         result = subprocess.run(
             ['nmcli', '-t', '-f', 'ACTIVE,SSID', 'dev', 'wifi'],
@@ -345,42 +358,22 @@ def already_connected_to():
 
 def setup_wifi():
     global wifi_mode
-
-    # Check if already connected before doing anything
     current = already_connected_to()
     if current == HOME_SSID:
-        print(f"Already connected to {HOME_SSID} — staying home")
-        wifi_mode = "home"
-        return "home"
+        wifi_mode = "home"; return "home"
     if current == SITE_SSID:
-        print(f"Already connected to {SITE_SSID} — joining as client")
-        wifi_mode = "client"
-        return "client"
-
-    # Not connected — scan and decide
-    print(f"Checking for {HOME_SSID}...")
+        wifi_mode = "client"; return "client"
     if scan_for(HOME_SSID):
         if connect_to(HOME_SSID, HOME_PASSWORD):
-            wifi_mode = "home"
-            return "home"
-
+            wifi_mode = "home"; return "home"
     delay = random.uniform(1, 5)
-    print(f"No home network. Waiting {delay:.1f}s before checking for {SITE_SSID}...")
     time.sleep(delay)
-
-    print(f"Checking for {SITE_SSID}...")
     if scan_for(SITE_SSID):
         if connect_to(SITE_SSID, SITE_PASSWORD):
-            wifi_mode = "client"
-            return "client"
-
-    print("No networks found — becoming host")
+            wifi_mode = "client"; return "client"
     if create_hotspot():
-        wifi_mode = "host"
-        return "host"
-
-    wifi_mode = "searching"
-    return "searching"
+        wifi_mode = "host"; return "host"
+    wifi_mode = "searching"; return "searching"
 
 
 # =============================================================
@@ -395,7 +388,6 @@ def init_sensor(bus):
         pass
 
 def read_sdp_raw(bus, address):
-    """Read raw pressure and temp. Returns (pressure_pa, temp_c) or (None, None)."""
     try:
         bus.i2c_rdwr(i2c_msg.write(address, [0x36, 0x2F]))
         time.sleep(0.05)
@@ -421,7 +413,6 @@ def celsius_to_fahrenheit(c):
 # =============================================================
 
 def do_zeroing(bus):
-    """Average ZERO_SAMPLES readings on each sensor to find offsets."""
     global zero_offset1, zero_offset2, boot_stage
     print("Zeroing sensors...")
     samples1, samples2 = [], []
@@ -434,80 +425,124 @@ def do_zeroing(bus):
     with lock:
         zero_offset1 = sum(samples1) / len(samples1) if samples1 else 0.0
         zero_offset2 = sum(samples2) / len(samples2) if samples2 else 0.0
-        boot_stage   = "confirm_temp"
-    print(f"Zero offsets — S1: {zero_offset1:.3f} Pa  S2: {zero_offset2:.3f} Pa")
+        boot_stage   = "pick_temp"
+    print(f"Zero offsets — S1: {zero_offset1:.3f}  S2: {zero_offset2:.3f}")
+
+def _resolve_temp_band(clicks):
+    """
+    Given click count, return the band string.
+    1 click → "auto" (will be resolved from thermometer).
+    2–5 clicks → fixed band.
+    Out of range → nearest valid.
+    """
+    c = max(1, min(5, clicks))
+    return TEMP_CLICK_BANDS[c]
+
+def _temp_timeout():
+    """Called 3s after last click in pick_temp stage — commit the choice."""
+    global boot_stage, temp_band_choice, outdoor_temp_f, _temp_click_timer
+    with lock:
+        if boot_stage != "pick_temp":
+            return
+        clicks = temp_clicks
+        t1     = current_temp1
+        t2     = current_temp2
+
+    band = _resolve_temp_band(clicks)
+
+    if band == "auto":
+        # Use thermometer average
+        temps = [t for t in [t1, t2] if t is not None]
+        if temps:
+            avg_c  = sum(temps) / len(temps)
+            temp_f = celsius_to_fahrenheit(avg_c)
+        else:
+            temp_f = 50.0   # safe fallback if no sensor reads
+        resolved_band = temp_band_from_f(temp_f)
+        print(f"Auto temp: {temp_f:.1f}°F → band {resolved_band}")
+    else:
+        temp_f        = TEMP_BAND_MIDPOINT_F[band]
+        resolved_band = band
+        print(f"Manual temp: {clicks} clicks → band {resolved_band}")
+
+    with lock:
+        temp_band_choice = resolved_band
+        outdoor_temp_f   = temp_f
+        boot_stage       = "pick_zone"
+        _temp_click_timer = None
+
+def _zone_timeout():
+    """Called 3s after last click in pick_zone stage — commit zone."""
+    global boot_stage, _zone_click_timer
+    with lock:
+        if boot_stage == "pick_zone":
+            boot_stage = "lock_baseline"
+            _zone_click_timer = None
+            print(f"Zone locked: {climate_zone}")
 
 def advance_boot_stage():
-    """Called on button press during boot sequence."""
-    global boot_stage, outdoor_temp_f, climate_zone, zone_clicks
+    """Called on every short button press during boot."""
+    global boot_stage, temp_clicks, zone_clicks, climate_zone
     global baseline1, baseline2, target1, target2
+    global _temp_click_timer, _zone_click_timer
 
     with lock:
         stage = boot_stage
 
-    if stage == "confirm_temp":
-        # Confirm the temp shown on screen
+    if stage == "pick_temp":
+        # Cancel existing timer, increment clicks, restart timer
         with lock:
-            # Use average of both sensor temps, converted to °F
-            t1 = current_temp1
-            t2 = current_temp2
-            temps = [t for t in [t1, t2] if t is not None]
-            if temps:
-                avg_c = sum(temps) / len(temps)
-                outdoor_temp_f = round(celsius_to_fahrenheit(avg_c), 1)
-            else:
-                outdoor_temp_f = 50.0   # safe fallback
-            boot_stage = "pick_zone"
-            zone_clicks = 0
-        print(f"Outdoor temp confirmed: {outdoor_temp_f}°F")
+            temp_clicks += 1
+            clicks = temp_clicks
+        if _temp_click_timer is not None:
+            _temp_click_timer.cancel()
+        _temp_click_timer = threading.Timer(CLICK_TIMEOUT, _temp_timeout)
+        _temp_click_timer.start()
+        print(f"Temp click {clicks} → {TEMP_CLICK_BANDS.get(min(5,clicks), '?')}")
 
     elif stage == "pick_zone":
-        # Each click cycles through zones; after 3s with no click → advance
         with lock:
             zone_clicks += 1
+            zc = zone_clicks
             zones = [ZONE_MILD, ZONE_MODERATE, ZONE_SEVERE]
-            climate_zone = zones[(zone_clicks - 1) % 3]
-        print(f"Zone click {zone_clicks} → {climate_zone}")
-        # Start a timer to auto-advance if no more clicks
-        threading.Timer(3.0, _zone_timeout).start()
+            climate_zone = zones[(zc - 1) % 3]
+        if _zone_click_timer is not None:
+            _zone_click_timer.cancel()
+        _zone_click_timer = threading.Timer(CLICK_TIMEOUT, _zone_timeout)
+        _zone_click_timer.start()
+        print(f"Zone click {zc} → {climate_zone}")
 
     elif stage == "lock_baseline":
-        # Lock both sensor baselines right now
         with lock:
             p1 = current_pressure1
             p2 = current_pressure2
             tf = outdoor_temp_f if outdoor_temp_f is not None else 50.0
             z  = climate_zone
-
-            baseline1 = p1
-            baseline2 = p2
-            target1   = lookup_target(z, tf, p1) if p1 is not None else None
-            target2   = lookup_target(z, tf, p2) if p2 is not None else None
+            baseline1  = p1
+            baseline2  = p2
+            target1    = lookup_target(z, tf, p1) if p1 is not None else None
+            target2    = lookup_target(z, tf, p2) if p2 is not None else None
             boot_stage = "running"
-
-        print(f"Baseline locked — S1: {baseline1} Pa → target {target1} Pa")
-        print(f"Baseline locked — S2: {baseline2} Pa → target {target2} Pa")
-
-def _zone_timeout():
-    """Auto-advance from pick_zone to lock_baseline after 3s silence."""
-    global boot_stage
-    with lock:
-        if boot_stage == "pick_zone":
-            boot_stage = "lock_baseline"
-            print(f"Zone locked: {climate_zone} — waiting for baseline click")
+        print(f"Baseline S1: {baseline1} → target {target1} Pa")
+        print(f"Baseline S2: {baseline2} → target {target2} Pa")
 
 def re_enter_setup():
-    """Called on long press — restart the boot sequence."""
-    global boot_stage, outdoor_temp_f, climate_zone, zone_clicks
-    global baseline1, baseline2, target1, target2
+    global boot_stage, temp_clicks, temp_band_choice, outdoor_temp_f
+    global zone_clicks, climate_zone, baseline1, baseline2, target1, target2
+    global _temp_click_timer, _zone_click_timer
+    if _temp_click_timer: _temp_click_timer.cancel()
+    if _zone_click_timer: _zone_click_timer.cancel()
     with lock:
-        boot_stage     = "confirm_temp"
-        outdoor_temp_f = None
-        zone_clicks    = 0
-        baseline1      = None
-        baseline2      = None
-        target1        = None
-        target2        = None
+        boot_stage       = "pick_temp"
+        temp_clicks      = 0
+        temp_band_choice = None
+        outdoor_temp_f   = None
+        zone_clicks      = 0
+        climate_zone     = DEFAULT_ZONE
+        baseline1        = None
+        baseline2        = None
+        target1          = None
+        target2          = None
     print("Setup restarted by long press")
 
 
@@ -532,14 +567,12 @@ def button_up():
         stage = boot_stage
 
     if held >= HOLD_SECONDS:
-        # Long press: re-enter setup OR toggle screen
         if stage == "running":
             re_enter_setup()
         return
 
     # Short press
     if stage == "running":
-        # Toggle screen on/off
         with lock:
             active = not active
         if active:
@@ -552,7 +585,7 @@ def button_up():
 
 
 # =============================================================
-# Screen
+# Screen drawing
 # =============================================================
 
 def load_splash():
@@ -575,61 +608,95 @@ def _font(fp, fr, size, bold=False):
     except Exception:
         return ImageFont.load_default()
 
-def make_screen_boot(stage, temp_c, zone, zone_clicks_count):
-    """Draw the boot/setup screens."""
+def make_screen_boot(stage, temp_c, zone, temp_clicks_count, zone_clicks_count, temp_band_chosen):
     img  = Image.new('RGB', (240, 280), (0, 0, 0))
     draw = ImageDraw.Draw(img)
     fp   = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     fr   = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    f_big   = _font(fp, fr, 36, True)
-    f_med   = _font(fp, fr, 20, True)
-    f_small = _font(fp, fr, 15, False)
-    f_tiny  = _font(fp, fr, 13, False)
+    f_big   = _font(fp, fr, 34, True)
+    f_med   = _font(fp, fr, 18, True)
+    f_small = _font(fp, fr, 14, False)
+    f_tiny  = _font(fp, fr, 12, False)
 
     draw.text((6, 4), DEVICE_NAME, font=f_small, fill=(120, 120, 255))
     draw.text((160, 4), "SETUP", font=f_small, fill=(255, 200, 50))
     draw.line([(0, 24), (240, 24)], fill=(50, 50, 50), width=1)
 
     if stage == "zeroing":
-        draw.text((20, 60),  "Zeroing sensors...", font=f_small, fill=(180, 180, 180))
-        draw.text((20, 90),  "Please wait", font=f_tiny, fill=(120, 120, 120))
+        draw.text((20, 60), "Zeroing sensors...", font=f_small, fill=(180, 180, 180))
+        draw.text((20, 90), "Please wait", font=f_tiny, fill=(120, 120, 120))
 
-    elif stage == "confirm_temp":
-        temp_f = celsius_to_fahrenheit(temp_c) if temp_c is not None else None
-        draw.text((10, 40), "Outdoor temp?", font=f_med, fill=(200, 200, 255))
-        if temp_f is not None:
-            draw.text((10, 75),  f"{temp_f:.1f} °F", font=f_big, fill=(100, 220, 255))
-            draw.text((10, 125), f"({temp_c:.1f} °C)", font=f_small, fill=(100, 150, 180))
+    elif stage == "pick_temp":
+        draw.text((6, 32), "Outdoor temp?", font=f_med, fill=(200, 200, 255))
+
+        # Show current selection based on clicks so far
+        clicks = temp_clicks_count
+        if clicks == 0:
+            # Nothing clicked yet — show the options
+            draw.text((6,  68), "1 click  = AUTO (thermometer)", font=f_tiny, fill=(100, 220, 255))
+            draw.text((6,  86), "2 clicks = below -4\u00b0F",          font=f_tiny, fill=(150, 150, 200))
+            draw.text((6, 104), "3 clicks = -4\u00b0F to 14\u00b0F",    font=f_tiny, fill=(150, 150, 200))
+            draw.text((6, 122), "4 clicks = 14\u00b0F to 32\u00b0F",    font=f_tiny, fill=(150, 150, 200))
+            draw.text((6, 140), "5 clicks = above 32\u00b0F",           font=f_tiny, fill=(150, 150, 200))
+            draw.text((6, 200), "Press to begin", font=f_tiny, fill=(180, 180, 80))
         else:
-            draw.text((10, 75), "-- °F", font=f_big, fill=(80, 80, 80))
-        draw.text((10, 200), "Press button to confirm", font=f_tiny, fill=(180, 180, 80))
+            # Show what's selected so far
+            c = min(5, clicks)
+            band = TEMP_CLICK_BANDS[c]
+            if band == "auto":
+                temp_f = celsius_to_fahrenheit(temp_c) if temp_c is not None else None
+                if temp_f is not None:
+                    label = f"AUTO: {temp_f:.0f}\u00b0F"
+                else:
+                    label = "AUTO: --\u00b0F"
+                color = (100, 220, 255)
+            else:
+                label = TEMP_BAND_LABELS[band]
+                color = (200, 220, 100)
+
+            # Click counter dots
+            dot_x = 6
+            for i in range(5):
+                col = (255, 200, 50) if i < c else (50, 50, 50)
+                draw.ellipse([dot_x + i*22, 58, dot_x + i*22 + 14, 72], fill=col)
+
+            draw.text((6, 82), label, font=f_med, fill=color)
+            draw.text((6, 200), "Wait 3s to confirm", font=f_tiny, fill=(180, 180, 80))
 
     elif stage == "pick_zone":
-        zones = [ZONE_MILD, ZONE_MODERATE, ZONE_SEVERE]
-        current = zones[(zone_clicks_count - 1) % 3] if zone_clicks_count > 0 else DEFAULT_ZONE
-        draw.text((10, 40), "Climate zone?", font=f_med, fill=(200, 200, 255))
-        colors = {ZONE_MILD: (100, 255, 100), ZONE_MODERATE: (255, 200, 50), ZONE_SEVERE: (255, 80, 80)}
-        draw.text((10, 80), current.upper(), font=f_big, fill=colors.get(current, (200,200,200)))
-        draw.text((10, 140), "1 click = Mild", font=f_tiny, fill=(150,150,150))
-        draw.text((10, 158), "2 clicks = Moderate", font=f_tiny, fill=(150,150,150))
-        draw.text((10, 176), "3 clicks = Severe", font=f_tiny, fill=(150,150,150))
-        draw.text((10, 210), "Wait 3s to confirm", font=f_tiny, fill=(180, 180, 80))
+        zones  = [ZONE_MILD, ZONE_MODERATE, ZONE_SEVERE]
+        zc     = zone_clicks_count
+        current = zones[(zc - 1) % 3] if zc > 0 else DEFAULT_ZONE
+        draw.text((6, 32), "Climate zone?", font=f_med, fill=(200, 200, 255))
+        colors = {ZONE_MILD: (100,255,100), ZONE_MODERATE: (255,200,50), ZONE_SEVERE: (255,80,80)}
+        draw.text((6, 68), current.upper(), font=f_big, fill=colors.get(current, (200,200,200)))
+        draw.text((6, 130), "1 click  = Mild",     font=f_tiny, fill=(150,150,150))
+        draw.text((6, 148), "2 clicks = Moderate",  font=f_tiny, fill=(150,150,150))
+        draw.text((6, 166), "3 clicks = Severe",    font=f_tiny, fill=(150,150,150))
+        draw.text((6, 210), "Wait 3s to confirm",   font=f_tiny, fill=(180,180,80))
+
+        # Show selected temp band as reminder
+        if temp_band_chosen:
+            draw.text((6, 254), f"Temp: {TEMP_BAND_LABELS.get(temp_band_chosen,'?')}",
+                      font=f_tiny, fill=(80,80,160))
 
     elif stage == "lock_baseline":
-        draw.text((10, 40),  "Ready to lock", font=f_med, fill=(200, 200, 255))
-        draw.text((10, 70),  "baseline pressure", font=f_med, fill=(200, 200, 255))
-        draw.text((10, 120), "Ensure fan is OFF", font=f_small, fill=(255, 180, 50))
-        draw.text((10, 145), "and tubes are placed", font=f_small, fill=(255, 180, 50))
-        draw.text((10, 200), "Press button to lock", font=f_tiny, fill=(180, 180, 80))
+        draw.text((6,  32), "Ready to lock",       font=f_med, fill=(200, 200, 255))
+        draw.text((6,  58), "baseline pressure",   font=f_med, fill=(200, 200, 255))
+        draw.text((6, 110), "Fan must be OFF",     font=f_small, fill=(255, 180, 50))
+        draw.text((6, 132), "Tubes in test holes", font=f_small, fill=(255, 180, 50))
+        if temp_band_chosen:
+            draw.text((6, 175), f"Temp: {TEMP_BAND_LABELS.get(temp_band_chosen,'?')}",
+                      font=f_tiny, fill=(80, 120, 200))
+        draw.text((6, 195), f"Zone: {zone.upper()}", font=f_tiny, fill=(80, 120, 200))
+        draw.text((6, 230), "Press to lock baseline", font=f_tiny, fill=(180, 180, 80))
 
     with lock:
         batt = current_battery
     draw_battery_bar(draw, batt)
-
     return image_to_pixels(img)
 
 def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
-    """Draw the main running screen with per-sensor pass/fail."""
     img  = Image.new('RGB', (240, 280), (0, 0, 0))
     draw = ImageDraw.Draw(img)
     fp   = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
@@ -639,8 +706,8 @@ def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
     f_small = _font(fp, fr, 14, False)
     f_tiny  = _font(fp, fr, 12, False)
 
-    mode_colors = {"home": (100,200,100), "host": (200,150,50),
-                   "client": (100,180,255), "searching": (160,160,160)}
+    mode_colors = {"home":(100,200,100),"host":(200,150,50),
+                   "client":(100,180,255),"searching":(160,160,160)}
     mode_labels = {"home":"HOME","host":"HOST","client":"CLIENT","searching":"..."}
     draw.text((6, 4), DEVICE_NAME, font=f_small, fill=(120,120,255))
     draw.text((160,4), mode_labels.get(mode,"?"), font=f_small,
@@ -649,62 +716,54 @@ def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
 
     def draw_sensor(label, pressure, target, y_top):
         draw.text((6, y_top), label, font=f_tiny, fill=(150,150,150))
-
         if pressure is None:
             draw.text((6, y_top+16), "--", font=f_big, fill=(80,80,80))
-            draw.line([(0, y_top+85),(240, y_top+85)], fill=(40,40,40), width=1)
+            draw.line([(0,y_top+85),(240,y_top+85)], fill=(40,40,40), width=1)
             return
-
         if target is None:
-            # Blue — not calibrated yet, no target line
             color = (80, 160, 255)
             draw.text((6,   y_top+16), f"{pressure:.2f}", font=f_big, fill=color)
             draw.text((148, y_top+16), "Pa", font=f_med, fill=(100,140,200))
         else:
             passed = pressure <= target
-            color  = (0, 230, 0) if passed else (255, 60, 60)
-            label2 = "PASS" if passed else "FAIL"
-            draw.text((180, y_top+16), label2, font=f_med, fill=color)
+            color  = (0,230,0) if passed else (255,60,60)
+            draw.text((180, y_top+16), "PASS" if passed else "FAIL", font=f_med, fill=color)
             draw.text((6,   y_top+16), f"{pressure:.2f}", font=f_big, fill=color)
             draw.text((148, y_top+16), "Pa", font=f_med, fill=color)
             draw.text((6,   y_top+65), f"Target: {target:.2f} Pa", font=f_small, fill=(180,180,180))
-
-        draw.line([(0, y_top+85),(240, y_top+85)], fill=(40,40,40), width=1)
+        draw.line([(0,y_top+85),(240,y_top+85)], fill=(40,40,40), width=1)
 
     draw_sensor("SENSOR 1", p1, tgt1, 28)
     draw_sensor("SENSOR 2", p2, tgt2, 118)
 
-    # Footer
     with lock:
         tf  = outdoor_temp_f
+        tbc = temp_band_choice
         z   = climate_zone
-    if tf is not None:
-        draw.text((6, 215), f"{tf:.0f}°F  {z[:3].upper()}", font=f_tiny, fill=(100,100,200))
-    else:
-        draw.text((6, 215), "Temp not set", font=f_tiny, fill=(160,80,80))
+    band_label = TEMP_BAND_LABELS.get(tbc, "?") if tbc else "Temp not set"
+    draw.text((6, 215), band_label,   font=f_tiny, fill=(100,100,200))
+    draw.text((6, 230), z.upper(),    font=f_tiny, fill=(100,100,200))
 
     if mode == "host":
         with lock:
             count = len(sensor_data)
-        draw.text((6, 234), f"Devices: {count}", font=f_tiny, fill=(0,180,80))
+        draw.text((6, 245), f"Devices: {count}", font=f_tiny, fill=(0,180,80))
     elif mode == "client":
-        draw.text((6, 234), "Reporting to host", font=f_tiny, fill=(100,180,255))
+        draw.text((6, 245), "Reporting to host", font=f_tiny, fill=(100,180,255))
 
     ip = get_host_ip()
-    draw.text((6, 254), f"http://{ip}" if ip else "...",
+    draw.text((6, 260), f"http://{ip}" if ip else "...",
               font=f_tiny, fill=(100,180,255) if ip else (160,160,160))
 
     with lock:
         batt = current_battery
     draw_battery_bar(draw, batt)
-
     return image_to_pixels(img)
 
 def screen_thread(board, splash):
     if splash:
         board.draw_image(0, 0, 240, 280, splash)
     last_state = None
-
     while True:
         with lock:
             is_active = active
@@ -715,34 +774,34 @@ def screen_thread(board, splash):
             tgt1   = target1
             tgt2   = target2
             mode   = wifi_mode
+            tc     = temp_clicks
             zc     = zone_clicks
+            tbc    = temp_band_choice
             batt   = current_battery
 
         if not is_active:
             time.sleep(0.5)
             continue
 
-        # Only redraw when something meaningful actually changed
-        p1r = round(p1, 1) if p1 is not None else None
-        p2r = round(p2, 1) if p2 is not None else None
-        t1r = round(t1, 1) if t1 is not None else None
-        br  = round(batt)  if batt is not None else None
-        state = (stage, p1r, p2r, t1r, tgt1, tgt2, mode, zc, br)
+        p1r  = round(p1,   1) if p1   is not None else None
+        p2r  = round(p2,   1) if p2   is not None else None
+        t1r  = round(t1,   1) if t1   is not None else None
+        br   = round(batt)    if batt is not None else None
+        state = (stage, p1r, p2r, t1r, tgt1, tgt2, mode, tc, zc, tbc, br)
 
         if state != last_state:
             if stage == "running":
                 pixels = make_screen_running(p1, p2, t1, tgt1, tgt2, mode)
             else:
-                pixels = make_screen_boot(stage, t1, climate_zone, zc)
+                pixels = make_screen_boot(stage, t1, climate_zone, tc, zc, tbc)
             board.draw_image(0, 0, 240, 280, pixels)
             last_state = state
 
         time.sleep(0.5)
 
 
-
 # =============================================================
-# Web dashboard (host only)
+# Web dashboard (unchanged)
 # =============================================================
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -853,7 +912,6 @@ function sensorBox(label, val, tgt, stale) {
     </div>`;
   }
   if (tgt === null || tgt === undefined) {
-    // Blue — uncalibrated, no target line
     return `<div class="sensor-box blue">
       <div class="s-top"><span class="sensor-label">${label}</span></div>
       <div class="sensor-value blue-val">${fmtPa(val)}<span class="sensor-unit">Pa</span></div>
@@ -928,11 +986,11 @@ def report_data_loop(host_ip):
     while True:
         try:
             with lock:
-                p1   = current_pressure1
-                p2   = current_pressure2
-                t1   = current_temp1
-                tg1  = target1
-                tg2  = target2
+                p1  = current_pressure1
+                p2  = current_pressure2
+                t1  = current_temp1
+                tg1 = target1
+                tg2 = target2
             payload = json.dumps({
                 'name':  DEVICE_NAME,
                 's1':    p1,
@@ -957,7 +1015,6 @@ print(f"Starting PFE Sensor — {DEVICE_NAME}")
 board = WhisPlayBoard()
 board.set_backlight(80)
 
-# Wire up button — detect press/release for hold detection
 board.on_button_press(button_down)
 board.on_button_release(button_up)
 
@@ -966,30 +1023,22 @@ if splash:
     board.draw_image(0, 0, 240, 280, splash)
     time.sleep(1.5)
 
-# Start screen thread immediately
 threading.Thread(target=screen_thread, args=(board, None), daemon=True).start()
-
-# Start battery polling
 threading.Thread(target=battery_poll_loop, daemon=True).start()
 
-# WiFi in background so boot sequence can proceed in parallel
 threading.Thread(target=lambda: (
     setup_wifi(),
     run_web_server() if wifi_mode == "host" else None
 ), daemon=True).start()
 
-# Sensor loop — also runs the boot zeroing first
 with SMBus(1) as bus:
     init_sensor(bus)
-
-    # Step 1: zero calibration (blocks ~3 seconds)
     do_zeroing(bus)
 
     while True:
         p1_raw, t1 = read_sdp_raw(bus, SDP_ADDR_1)
         p2_raw, t2 = read_sdp_raw(bus, SDP_ADDR_2)
 
-        # Apply zero offsets
         p1 = (p1_raw - zero_offset1) if p1_raw is not None else None
         p2 = (p2_raw - zero_offset2) if p2_raw is not None else None
 
@@ -999,7 +1048,6 @@ with SMBus(1) as bus:
             current_pressure2 = p2
             current_temp2     = t2
 
-        # Host logs its own data
         if wifi_mode == "host" and boot_stage == "running":
             with lock:
                 sensor_data[DEVICE_NAME] = {
@@ -1011,15 +1059,15 @@ with SMBus(1) as bus:
                     'time': time.time(),
                 }
 
-        # Start client reporter once running and connected
         if wifi_mode == "client" and boot_stage == "running":
             host_ip = get_host_ip()
             if host_ip:
                 threading.Thread(target=report_data_loop,
                                  args=(host_ip,), daemon=True).start()
-                wifi_mode = "client_reporting"   # prevent re-spawning
+                wifi_mode = "client_reporting"
 
         s1_str = f"{p1:.2f} Pa" if p1 is not None else "--"
         s2_str = f"{p2:.2f} Pa" if p2 is not None else "--"
         print(f"S1: {s1_str}  S2: {s2_str}  Stage: {boot_stage}")
         time.sleep(1)
+                
