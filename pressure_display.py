@@ -656,12 +656,10 @@ def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
             return
 
         if target is None:
-            # Blue — not calibrated yet
+            # Blue — not calibrated yet, no target line
             color = (80, 160, 255)
             draw.text((6,   y_top+16), f"{pressure:.2f}", font=f_big, fill=color)
             draw.text((148, y_top+16), "Pa", font=f_med, fill=(100,140,200))
-            inwc = abs(pressure) / 249.0
-            draw.text((6,   y_top+65), f"{inwc:.4f} inWC", font=f_small, fill=(60,100,160))
         else:
             passed = pressure <= target
             color  = (0, 230, 0) if passed else (255, 60, 60)
@@ -669,8 +667,7 @@ def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
             draw.text((180, y_top+16), label2, font=f_med, fill=color)
             draw.text((6,   y_top+16), f"{pressure:.2f}", font=f_big, fill=color)
             draw.text((148, y_top+16), "Pa", font=f_med, fill=color)
-            inwc = abs(pressure) / 249.0
-            draw.text((6,   y_top+65), f"{inwc:.4f} inWC", font=f_small, fill=(180,180,180))
+            draw.text((6,   y_top+65), f"Target: {target:.2f} Pa", font=f_small, fill=(180,180,180))
 
         draw.line([(0, y_top+85),(240, y_top+85)], fill=(40,40,40), width=1)
 
@@ -830,7 +827,7 @@ h1 { color: #e8edf5; text-align: center; margin-bottom: 4px; font-size: 1.5em; l
 .fail-val { color: #ff6060; }
 .blue-val { color: #5090ff; }
 .na-val   { color: #3a4a6a; font-size: 1.3em; }
-.sensor-inwc { font-size: 0.72em; margin-top: 4px; }
+.sensor-sub { font-size: 0.72em; margin-top: 4px; }
 .pass-val-dim { color: #00a050; }
 .fail-val-dim { color: #a03030; }
 .blue-val-dim { color: #3060a0; }
@@ -852,15 +849,15 @@ function sensorBox(label, val, tgt, stale) {
     return `<div class="sensor-box">
       <div class="s-top"><span class="sensor-label">${label}</span></div>
       <div class="sensor-value na-val">--</div>
-      <div class="sensor-inwc">&nbsp;</div>
+      <div class="sensor-sub">&nbsp;</div>
     </div>`;
   }
   if (tgt === null || tgt === undefined) {
-    // Blue — uncalibrated
+    // Blue — uncalibrated, no target line
     return `<div class="sensor-box blue">
       <div class="s-top"><span class="sensor-label">${label}</span></div>
       <div class="sensor-value blue-val">${fmtPa(val)}<span class="sensor-unit">Pa</span></div>
-      <div class="sensor-inwc blue-val-dim">${fmtInWC(val)} inWC</div>
+      <div class="sensor-sub">&nbsp;</div>
     </div>`;
   }
   const pass = val <= tgt;
@@ -875,7 +872,7 @@ function sensorBox(label, val, tgt, stale) {
       <span class="s-badge ${bc}">${bt}</span>
     </div>
     <div class="sensor-value ${vc}">${fmtPa(val)}<span class="sensor-unit">Pa</span></div>
-    <div class="sensor-inwc ${dc}">${fmtInWC(val)} inWC</div>
+    <div class="sensor-sub ${dc}">Target: ${fmtPa(tgt)} Pa</div>
   </div>`;
 }
 
