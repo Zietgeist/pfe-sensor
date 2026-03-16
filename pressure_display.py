@@ -330,19 +330,57 @@ def get_host_ip():
         pass
     return None
 
+def already_connected_to():
+    """Return the SSID we are currently connected to, or None."""
+    try:
+        result = subprocess.run(
+            ['nmcli', '-t', '-f', 'ACTIVE,SSID', 'dev', 'wifi'],
+            capture_output=True, text=True, timeout=10)
+        for line in result.stdout.splitlines():
+            if line.startswith('yes:'):
+                return line.split(':', 1)[1].strip()
+    except Exception:
+        pass
+    return None
+
 def setup_wifi():
     global wifi_mode
+
+    # Check if already connected before doing anything
+    current = already_connected_to()
+    if current == HOME_SSID:
+        print(f"Already connected to {HOME_SSID} — staying home")
+        wifi_mode = "home"
+        return "home"
+    if current == SITE_SSID:
+        print(f"Already connected to {SITE_SSID} — joining as client")
+        wifi_mode = "client"
+        return "client"
+
+    # Not connected — scan and decide
+    print(f"Checking for {HOME_SSID}...")
     if scan_for(HOME_SSID):
         if connect_to(HOME_SSID, HOME_PASSWORD):
-            wifi_mode = "home"; return "home"
+            wifi_mode = "home"
+            return "home"
+
     delay = random.uniform(1, 5)
+    print(f"No home network. Waiting {delay:.1f}s before checking for {SITE_SSID}...")
     time.sleep(delay)
+
+    print(f"Checking for {SITE_SSID}...")
     if scan_for(SITE_SSID):
         if connect_to(SITE_SSID, SITE_PASSWORD):
-            wifi_mode = "client"; return "client"
+            wifi_mode = "client"
+            return "client"
+
+    print("No networks found — becoming host")
     if create_hotspot():
-        wifi_mode = "host"; return "host"
-    wifi_mode = "searching"; return "searching"
+        wifi_mode = "host"
+        return "host"
+
+    wifi_mode = "searching"
+    return "searching"
 
 
 # =============================================================
