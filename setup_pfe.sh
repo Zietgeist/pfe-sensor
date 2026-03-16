@@ -135,6 +135,7 @@ else
     sudo -u pi git pull
     ok "PFE repo updated"
 fi
+git config --global --add safe.directory /home/pi/pfe-sensor
 
 # STEP 7b — Set PFE-home as preferred network (highest priority)
 info "Setting PFE-home as preferred network..."
