@@ -136,6 +136,12 @@ else
     ok "PFE repo updated"
 fi
 
+# STEP 7b — Set PFE-home as preferred network (highest priority)
+info "Setting PFE-home as preferred network..."
+nmcli connection modify PFE-home connection.autoconnect-priority 100 \
+    && ok "PFE-home priority set to 100" \
+    || info "PFE-home connection not found — skipping (make sure it was set in RPi Imager)"
+
 # STEP 8 — Systemd service
 info "Installing systemd service..."
 cat > /etc/systemd/system/pfe-sensor.service <<EOF
@@ -173,7 +179,7 @@ echo " Useful commands:"
 echo "   Watch logs:     tail -f $HOME_DIR/pfe_update.log"
 echo "   Service status: systemctl status pfe-sensor"
 echo "   Start manually: systemctl start pfe-sensor"
-echo "   Battery level:  echo 'get battery' | nc -q 0 127.0.0.1 8423"
+echo "   Battery level:  python3 -c \"import socket; s=socket.socket(); s.connect(('127.0.0.1',8423)); s.send(b'get battery\n'); print(s.recv(64).decode()); s.close()\""
 echo ""
 echo " Battery auto-shutdown: 15% (60 second delay)"
 echo " PiSugar WebUI: http://<this-pi-ip>:8421"
