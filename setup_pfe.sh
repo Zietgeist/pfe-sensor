@@ -68,7 +68,7 @@ apt-get install -y \
     network-manager
 ok "System dependencies installed"
 
-# STEP 4 — I2C and SPI
+# STEP 4 — I2C and SPI (first pass)
 info "Enabling I2C interface..."
 raspi-config nonint do_i2c 0
 ok "I2C enabled"
@@ -110,7 +110,7 @@ if [ ! -f "$CONFIG" ]; then
     err "PiSugar config not found at $CONFIG — driver may not have installed correctly"
 fi
 
-python3 - <<EOF
+python3 - <<PYEOF
 import json
 with open("$CONFIG", 'r') as f:
     config = json.load(f)
@@ -119,10 +119,16 @@ config['auto_shutdown_delay'] = 60
 with open("$CONFIG", 'w') as f:
     json.dump(config, f, indent=2)
 print("Config updated")
-EOF
+PYEOF
 
 systemctl restart pisugar-server
 ok "Auto-shutdown set: triggers at 15% battery, 60s delay"
+
+# STEP 6b — Re-enable SPI after PiSugar
+# PiSugar install can silently break SPI — must re-enable after
+info "Re-enabling SPI after PiSugar install..."
+raspi-config nonint do_spi 0
+ok "SPI re-enabled"
 
 # STEP 7 — Clone PFE repo
 info "Cloning PFE sensor repo..."
@@ -135,7 +141,10 @@ else
     sudo -u pi git pull
     ok "PFE repo updated"
 fi
-git config --global --add safe.directory /home/pi/pfe-sensor
+
+# Fix git ownership — repo owned by pi but service runs as root
+git config --global --add safe.directory "$REPO_DIR"
+ok "Git safe directory configured"
 
 # STEP 7b — Set PFE-home as preferred network (highest priority)
 info "Setting PFE-home as preferred network..."
@@ -145,7 +154,7 @@ nmcli connection modify PFE-home connection.autoconnect-priority 100 \
 
 # STEP 8 — Systemd service
 info "Installing systemd service..."
-cat > /etc/systemd/system/pfe-sensor.service <<EOF
+cat > /etc/systemd/system/pfe-sensor.service <<SVCEOF
 [Unit]
 Description=PFE Sensor — auto-update and run ($DEVICE_NAME)
 After=network-online.target
@@ -160,7 +169,7 @@ RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-EOF
+SVCEOF
 
 systemctl daemon-reload
 systemctl enable pfe-sensor.service
