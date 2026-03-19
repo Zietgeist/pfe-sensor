@@ -1067,13 +1067,13 @@ if errors:
     err_screen = make_error_screen(errors)
     board.draw_image(0, 0, 240, 280, err_screen)
     print(f"SELF TEST FAILED: {errors}")
-    # Wait for button press to continue anyway
-    import RPi.GPIO as GPIO
-    GPIO.setmode(GPIO.BOARD)
-    GPIO.setup(11, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    
+    # Use board's button callback instead of raw GPIO
+    button_pressed = threading.Event()
+    board.button_press_callback = lambda: button_pressed.set()
     print("Waiting for button press to continue...")
-    while GPIO.input(11) == GPIO.HIGH:
-        time.sleep(0.1)
+    button_pressed.wait()
+    board.button_press_callback = None
     print("Button pressed — continuing despite errors")
 
 threading.Thread(target=screen_thread, args=(board, None), daemon=True).start()
