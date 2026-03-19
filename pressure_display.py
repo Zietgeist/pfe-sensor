@@ -852,22 +852,22 @@ def build_dashboard_html():
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: 'Courier New', monospace; background: #0a0f1a; color: #e8edf5; padding: 20px; }
 h1 { color: #e8edf5; text-align: center; margin-bottom: 4px; font-size: 1.5em; letter-spacing: 2px; }
-.subtitle { text-align: center; color: #7a8aaa; font-size: 0.85em; margin-bottom: 24px; letter-spacing: 1px; }
+.subtitle { text-align: center; color: #c8d8f8; font-size: 0.85em; margin-bottom: 24px; letter-spacing: 1px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; max-width: 1100px; margin: 0 auto; }
 .card { background: #131c2e; border-radius: 10px; padding: 18px; border: 1.5px solid #2a3a5c; }
 .card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
 .card-name { font-size: 1em; font-weight: 700; color: #c8d8f8; letter-spacing: 1px; }
 .badge { font-size: 0.7em; padding: 3px 10px; border-radius: 4px; font-weight: 700; letter-spacing: 1px; }
-.badge-offline { background: #1e2535; color: #7a8aaa; border: 1px solid #3a4460; }
+.badge-offline { background: #1e2535; color: #a0b0cc; border: 1px solid #3a4460; }
 .sensors { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .sensor-box { background: #0d1525; border-radius: 8px; padding: 12px; text-align: center; border: 1px solid #1e2e4a; }
 .sensor-box.pass { background: #0d1f17; border-color: #00c060; }
 .sensor-box.fail { background: #1f0d0d; border-color: #e03030; }
 .sensor-box.blue { background: #0d1530; border-color: #3060c0; }
-.sensor-label { font-size: 0.65em; color: #5a7aaa; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; }
-.sensor-box.pass .sensor-label { color: #00a050; }
-.sensor-box.fail .sensor-label { color: #c03030; }
-.sensor-box.blue .sensor-label { color: #4080d0; }
+.sensor-label { font-size: 0.65em; color: #a0b8d8; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; }
+.sensor-box.pass .sensor-label { color: #00c060; }
+.sensor-box.fail .sensor-label { color: #e03030; }
+.sensor-box.blue .sensor-label { color: #5090ff; }
 .s-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .s-badge { font-size: 0.65em; padding: 2px 7px; border-radius: 3px; font-weight: 700; letter-spacing: 1px; }
 .s-badge-pass { background: #003d20; color: #00e874; border: 1px solid #00c060; }
@@ -877,11 +877,13 @@ h1 { color: #e8edf5; text-align: center; margin-bottom: 4px; font-size: 1.5em; l
 .pass-val { color: #00e874; }
 .fail-val { color: #ff6060; }
 .blue-val { color: #5090ff; }
-.na-val   { color: #3a4a6a; font-size: 1.3em; }
+.na-val   { color: #8899bb; font-size: 1.3em; }
 .sensor-sub { font-size: 0.72em; margin-top: 4px; }
 .pass-val-dim { color: #00a050; }
-.fail-val-dim { color: #a03030; }
-.blue-val-dim { color: #3060a0; }
+.fail-val-dim { color: #c03030; }
+.blue-val-dim { color: #4070b0; }
+#footer { text-align: center; color: #8899bb; font-size: 0.78em; margin-top: 24px; }
+.no-sensors { text-align: center; color: #8899bb; margin-top: 60px; grid-column: 1/-1; }
 #footer { text-align: center; color: #4a5a7a; font-size: 0.78em; margin-top: 24px; }
 .no-sensors { text-align: center; color: #4a5a7a; margin-top: 60px; grid-column: 1/-1; }
   </style>
