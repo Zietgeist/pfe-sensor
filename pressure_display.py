@@ -613,9 +613,10 @@ def make_error_screen(errors):
         draw.text((8, y), err, font=f_small, fill=(255, 80, 80))
         y += 28
 
-    draw.text((8, 220), "Fix then reboot:", font=f_small, fill=(180, 180, 180))
-    draw.text((8, 242), "raspi-config nonint", font=f_small, fill=(255, 200, 0))
-    draw.text((8, 260), "do_spi 0  /  do_i2c 0", font=f_small, fill=(255, 200, 0))
+    draw.text((8, 200), "Fix then reboot:", font=f_small, fill=(180, 180, 180))
+    draw.text((8, 222), "raspi-config nonint", font=f_small, fill=(255, 200, 0))
+    draw.text((8, 244), "do_spi 0  /  do_i2c 0", font=f_small, fill=(255, 200, 0))
+    draw.text((8, 266), "[ btn ] continue anyway", font=f_small, fill=(100, 180, 255))
 
     return image_to_pixels(img)
 
@@ -1059,7 +1060,21 @@ board.on_button_release(button_up)
 splash = load_splash()
 if splash:
     board.draw_image(0, 0, 240, 280, splash)
-    time.sleep(1.5)
+    time.sleep(2)
+
+errors = self_test(board)
+if errors:
+    err_screen = make_error_screen(errors)
+    board.draw_image(0, 0, 240, 280, err_screen)
+    print(f"SELF TEST FAILED: {errors}")
+    # Wait for button press to continue anyway
+    import RPi.GPIO as GPIO
+    GPIO.setmode(GPIO.BOARD)
+    GPIO.setup(11, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    print("Waiting for button press to continue...")
+    while GPIO.input(11) == GPIO.HIGH:
+        time.sleep(0.1)
+    print("Button pressed — continuing despite errors")
 
 threading.Thread(target=screen_thread, args=(board, None), daemon=True).start()
 threading.Thread(target=battery_poll_loop, daemon=True).start()
