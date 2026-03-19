@@ -763,40 +763,24 @@ def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
 def screen_thread(board, splash):
     if splash:
         board.draw_image(0, 0, 240, 280, splash)
-    last_state = None
+    last = (None, None, None, None)
+    last_draw_time = 0
     while True:
         with lock:
             is_active = active
-            stage  = boot_stage
-            p1     = current_pressure1
-            p2     = current_pressure2
-            t1     = current_temp1
-            tgt1   = target1
-            tgt2   = target2
-            mode   = wifi_mode
-            tc     = temp_clicks
-            zc     = zone_clicks
-            tbc    = temp_band_choice
-            batt   = current_battery
-
-        if not is_active:
-            time.sleep(0.5)
-            continue
-
-        p1r  = round(p1,   1) if p1   is not None else None
-        p2r  = round(p2,   1) if p2   is not None else None
-        t1r  = round(t1,   1) if t1   is not None else None
-        br   = round(batt)    if batt is not None else None
-        state = (stage, p1r, p2r, t1r, tgt1, tgt2, mode, tc, zc, tbc, br)
-
-        if state != last_state:
-            if stage == "running":
-                pixels = make_screen_running(p1, p2, t1, tgt1, tgt2, mode)
-            else:
-                pixels = make_screen_boot(stage, t1, climate_zone, tc, zc, tbc)
-            board.draw_image(0, 0, 240, 280, pixels)
-            last_state = state
-
+            p1   = current_pressure1
+            p2   = current_pressure2
+            tgt  = target_pressure
+            mode = wifi_mode
+        current = (round(p1, 2) if p1 is not None else None,
+                   round(p2, 2) if p2 is not None else None,
+                   tgt, mode)
+        now = time.time()
+        if is_active and current != last and (now - last_draw_time) >= 2:
+            screen_data = make_screen(p1, p2, tgt, mode)
+            board.draw_image(0, 0, 240, 280, screen_data)
+            last = current
+            last_draw_time = now
         time.sleep(0.5)
 
 
