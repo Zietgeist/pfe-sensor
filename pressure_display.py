@@ -594,7 +594,51 @@ def load_splash():
         return image_to_pixels(img)
     except Exception:
         return None
+def make_error_screen(errors):
+    img  = Image.new('RGB', (240, 280), (0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    fp   = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    fr   = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    f_med   = ImageFont.truetype(fp, 18) if os.path.exists(fp) else ImageFont.load_default()
+    f_small = ImageFont.truetype(fr, 14) if os.path.exists(fr) else ImageFont.load_default()
 
+    # Red header bar
+    draw.rectangle([(0, 0), (240, 36)], fill=(180, 0, 0))
+    draw.text((8, 8), "HARDWARE ERROR", font=f_med, fill=(255, 255, 255))
+
+    draw.text((8, 48), DEVICE_NAME, font=f_small, fill=(120, 120, 255))
+
+    y = 80
+    for err in errors:
+        draw.text((8, y), err, font=f_small, fill=(255, 80, 80))
+        y += 28
+
+    draw.text((8, 220), "Fix then reboot:", font=f_small, fill=(180, 180, 180))
+    draw.text((8, 242), "raspi-config nonint", font=f_small, fill=(255, 200, 0))
+    draw.text((8, 260), "do_spi 0  /  do_i2c 0", font=f_small, fill=(255, 200, 0))
+
+    return image_to_pixels(img)
+
+def self_test(board):
+    """Check SPI (Whisplay) and I2C sensors. Returns list of error strings."""
+    errors = []
+
+    # SPI — if we got here, board init succeeded (SPI works)
+    # I2C — try to ping 0x25 and 0x26
+    try:
+        with SMBus(1) as bus:
+            try:
+                bus.read_byte(SDP_ADDR_1)
+            except Exception:
+                errors.append("NO SENSOR at 0x25 (S1)")
+            try:
+                bus.read_byte(SDP_ADDR_2)
+            except Exception:
+                errors.append("NO SENSOR at 0x26 (S2)")
+    except Exception:
+        errors.append("I2C BUS FAILED")
+
+    return errors
 def image_to_pixels(img):
     pixels = []
     for r, g, b in img.getdata():
