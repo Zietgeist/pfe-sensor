@@ -49,7 +49,7 @@ HOME_PASSWORD = "pferadon1"
 SITE_SSID     = "PFE-NET"
 SITE_PASSWORD = "pferadon1"
 
-HOST_IP       = "192.168.4.1"
+HOST_IP       = "10.42.0.1"
 WEB_PORT      = 80
 
 ZONE_MILD     = "mild"
