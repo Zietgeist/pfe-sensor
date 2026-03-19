@@ -761,23 +761,31 @@ def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
     return image_to_pixels(img)
 
 def screen_thread(board, splash):
-    if splash:
-        board.draw_image(0, 0, 240, 280, splash)
-    last = (None, None, None, None)
+    last = None
     last_draw_time = 0
     while True:
         with lock:
             is_active = active
             p1   = current_pressure1
             p2   = current_pressure2
-            tgt  = target_pressure
+            t1   = current_temp1
+            tg1  = target1
+            tg2  = target2
             mode = wifi_mode
-        current = (round(p1, 2) if p1 is not None else None,
-                   round(p2, 2) if p2 is not None else None,
-                   tgt, mode)
+            stage = boot_stage
+            tc   = temp_clicks
+            zc   = zone_clicks
+            tbc  = temp_band_choice
+            z    = climate_zone
         now = time.time()
+        current = (stage, round(p1, 2) if p1 is not None else None,
+                   round(p2, 2) if p2 is not None else None,
+                   tg1, tg2, mode, tc, zc, tbc, z)
         if is_active and current != last and (now - last_draw_time) >= 2:
-            screen_data = make_screen(p1, p2, tgt, mode)
+            if stage == "running":
+                screen_data = make_screen_running(p1, p2, t1, tg1, tg2, mode)
+            else:
+                screen_data = make_screen_boot(stage, t1, z, tc, zc, tbc)
             board.draw_image(0, 0, 240, 280, screen_data)
             last = current
             last_draw_time = now
