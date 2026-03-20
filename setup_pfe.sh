@@ -36,7 +36,7 @@ echo "[4/8] Installing Whisplay HAT driver..."
 cd /home/pi
 git clone https://github.com/PiSugar/Whisplay.git --depth 1
 cd /home/pi/Whisplay/Driver
-sudo bash install_wm8960_drive.sh
+echo "y" | sudo bash install_wm8960_drive.sh
 echo "Whisplay install done. Continuing (reboot comes at the end)..."
 
 # --- Enable I2C and SPI ---
@@ -85,6 +85,7 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable pfe-sensor.service
 
+echo ""
 echo "================================================"
 echo " $DEVICE_NAME setup complete!"
 echo ""
@@ -95,8 +96,7 @@ echo "      NOTE: If it freezes, press Ctrl+C, then run:"
 echo "      sudo dpkg --configure -a"
 echo "   2. After PiSugar install, re-enable SPI/I2C:"
 echo "      sudo raspi-config nonint do_spi 0 && sudo raspi-config nonint do_i2c 0"
-echo "   3. Verify auto-shutdown: 15% battery, 60s delay"
-echo "      (visit http://$(hostname -I | awk '{print $1}'):8421)"
+echo "   3. Check /boot/firmware/config.txt looks correct before rebooting"
 echo "   4. Reboot: sudo reboot"
 echo "   5. After reboot, check: cat /home/pi/pfe_update.log"
 echo "================================================"
