@@ -23,14 +23,13 @@ echo "$DEVICE_NAME" | sudo tee /etc/hostname > /dev/null
 sudo sed -i "s/127\.0\.1\.1.*/127.0.1.1\t$DEVICE_NAME/" /etc/hosts
 echo "Hostname set to $DEVICE_NAME."
 
-# --- Update system ---
-echo "[2/8] Updating system..."
-sudo apt update && sudo apt upgrade -y
+# --- Update package list only (no full upgrade) ---
+echo "[2/8] Updating package list..."
+sudo apt update
 
 # --- Install dependencies ---
 echo "[3/8] Installing dependencies..."
-sudo apt install -y git python3-pip python3-pil python3-pygame python3-smbus2 \
-  python3-flask network-manager
+sudo apt install -y git python3-pip python3-pil python3-smbus2 network-manager
 
 # --- Install Whisplay driver ---
 echo "[4/8] Installing Whisplay HAT driver..."
