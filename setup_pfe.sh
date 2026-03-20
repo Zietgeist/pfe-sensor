@@ -85,13 +85,14 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable pfe-sensor.service
 
-echo ""
 echo "================================================"
 echo " $DEVICE_NAME setup complete!"
 echo ""
 echo " Next steps:"
 echo "   1. Install PiSugar driver (interactive — select PiSugar 3):"
 echo "      curl http://cdn.pisugar.com/release/pisugar-power-manager.sh | sudo bash"
+echo "      NOTE: If it freezes, press Ctrl+C, then run:"
+echo "      sudo dpkg --configure -a"
 echo "   2. After PiSugar install, re-enable SPI/I2C:"
 echo "      sudo raspi-config nonint do_spi 0 && sudo raspi-config nonint do_i2c 0"
 echo "   3. Verify auto-shutdown: 15% battery, 60s delay"
