@@ -1062,21 +1062,7 @@ if splash:
     board.draw_image(0, 0, 240, 280, splash)
     time.sleep(2)
 
-errors = self_test(board)
-if errors:
-    err_screen = make_error_screen(errors)
-    board.draw_image(0, 0, 240, 280, err_screen)
-    print(f"SELF TEST FAILED: {errors}")
-    
-    # Use board's button callback instead of raw GPIO
-    button_pressed = threading.Event()
-    def _err_button_up():
-        button_pressed.set()
-    board.on_button_release(_err_button_up)
-    print("Waiting for button press to continue...")
-    button_pressed.wait()
-    board.on_button_release(button_up)  # restore normal handler
-    print("Button pressed — continuing despite errors")
+
 
 threading.Thread(target=screen_thread, args=(board, None), daemon=True).start()
 threading.Thread(target=battery_poll_loop, daemon=True).start()
@@ -1089,6 +1075,29 @@ threading.Thread(target=lambda: (
 with SMBus(1) as bus:
     init_sensor(bus)
     do_zeroing(bus)
+    errors = self_test(board)
+
+    if errors:
+        err_screen = make_error_screen(errors)
+        board.draw_image(0, 0, 240, 280, err_screen)
+        print(f"SELF TEST FAILED: {errors}")
+        button_pressed = threading.Event()
+        def _err_button_up():
+            button_pressed.set()
+        board.on_button_release(_err_button_up)
+        print("Waiting for button press to continue...")
+        button_pressed.wait()
+        board.on_button_release(button_up)
+        print("Button pressed — continuing despite errors")
+
+                
+    def _err_button_up():
+        button_pressed.set()
+    board.on_button_release(_err_button_up)
+    print("Waiting for button press to continue...")
+    button_pressed.wait()
+    board.on_button_release(button_up)  # restore normal handler
+    print("Button pressed — continuing despite errors")
 
     while True:
         p1_raw, t1 = read_sdp_raw(bus, SDP_ADDR_1)
