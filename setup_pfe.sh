@@ -2,7 +2,12 @@
 # PFE Sensor Setup Script — Revised
 # Run on a fresh Raspberry Pi OS Bookworm Lite install
 # Username: pi
+#
+# INSTALL COMMAND:
+#   curl -sSL https://raw.githubusercontent.com/Zietgeist/pfe-sensor/main/setup_pfe.sh -o setup_pfe.sh && bash setup_pfe.sh
+#
 # Don't abort on error — let it log and continue
+
 set +e
 
 # --- Ask for device number ---
