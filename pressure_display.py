@@ -751,13 +751,17 @@ def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
     f_small = _font(fp, fr, 14, False)
     f_tiny  = _font(fp, fr, 12, False)
 
-    mode_colors = {"home":(100,200,100),"host":(200,150,50),
-                   "client":(100,180,255),"searching":(160,160,160)}
-    mode_labels = {"home":"HOME","host":"HOST","client":"CLIENT","searching":"..."}
+    mode_colors = {"home":(100,200,100), "host":(200,150,50),
+                   "client":(100,180,255), "client_reporting":(100,180,255),  # ← add this
+                   "searching":(160,160,160)}
+    mode_labels = {"home":"HOME", "host":"HOST",
+                   "client":"CLIENT", "client_reporting":"CLIENT",  # ← and this
+                   "searching":"..."}
     draw.text((6, 4), DEVICE_NAME, font=f_small, fill=(120,120,255))
     draw.text((160,4), mode_labels.get(mode,"?"), font=f_small,
               fill=mode_colors.get(mode,(160,160,160)))
     draw.line([(0,24),(240,24)], fill=(50,50,50), width=1)
+
 
     def draw_sensor(label, pressure, target, y_top):
         draw.text((6, y_top), label, font=f_tiny, fill=(150,150,150))
@@ -1089,15 +1093,6 @@ with SMBus(1) as bus:
         button_pressed.wait()
         board.on_button_release(button_up)
         print("Button pressed — continuing despite errors")
-
-                
-    def _err_button_up():
-        button_pressed.set()
-    board.on_button_release(_err_button_up)
-    print("Waiting for button press to continue...")
-    button_pressed.wait()
-    board.on_button_release(button_up)  # restore normal handler
-    print("Button pressed — continuing despite errors")
 
     while True:
         p1_raw, t1 = read_sdp_raw(bus, SDP_ADDR_1)
