@@ -1107,6 +1107,7 @@ with SMBus(1) as bus:
             current_pressure2 = p2
             current_temp2     = t2
 
+        print(f"DEBUG: wifi_mode={wifi_mode} boot_stage={boot_stage}")
         if wifi_mode == "host" and boot_stage == "running":
             with lock:
                 sensor_data[DEVICE_NAME] = {
