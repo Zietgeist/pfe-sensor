@@ -1,200 +1,105 @@
 #!/bin/bash
-# =============================================================
-# PFE Sensor — Fresh Install Setup Script
-# Run once on a fresh Raspberry Pi OS Bookworm Lite
-# Usage: sudo bash setup_pfe.sh
-# =============================================================
+# PFE Sensor Setup Script — Revised
+# Run on a fresh Raspberry Pi OS Bookworm Lite install
+# Username: pi
 
-set -e
+# Don't abort on error — let it log and continue
+set +e
 
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
-
-ok()   { echo -e "${GREEN}[OK]${NC} $1"; }
-info() { echo -e "${YELLOW}[..] $1${NC}"; }
-err()  { echo -e "${RED}[ERR] $1${NC}"; exit 1; }
-
-if [[ $EUID -ne 0 ]]; then
-    err "Please run as root: sudo bash setup_pfe.sh"
-fi
-
-echo ""
-echo "============================================="
-echo "   PFE Sensor — Device Setup"
-echo "============================================="
-echo ""
-
+# --- Ask for device number ---
 read -p "Enter device number (e.g. 1 for PFE-1): " DEVICE_NUM
-
-if ! [[ "$DEVICE_NUM" =~ ^[0-9]+$ ]]; then
-    err "Device number must be a number (e.g. 1, 2, 3)"
-fi
-
 DEVICE_NAME="PFE-$DEVICE_NUM"
-HOME_DIR="/home/pi"
-REPO_DIR="$HOME_DIR/pfe-sensor"
-REPO_URL="https://github.com/Zietgeist/pfe-sensor.git"
+
+# --- Ask for GitHub PAT ---
+read -p "Enter GitHub PAT (for auto-updates): " GITHUB_PAT
 
 echo ""
-info "Setting up device: $DEVICE_NAME"
-info "Home directory: $HOME_DIR"
+echo "Setting up $DEVICE_NAME..."
 echo ""
 
-# STEP 1 — Hostname
-info "Setting hostname to $DEVICE_NAME..."
-hostnamectl set-hostname "$DEVICE_NAME"
-sed -i "s/127.0.1.1.*/127.0.1.1\t$DEVICE_NAME/" /etc/hosts
-ok "Hostname set to $DEVICE_NAME"
+# --- Set hostname ---
+echo "[1/9] Setting hostname to $DEVICE_NAME..."
+sudo hostnamectl set-hostname "$DEVICE_NAME"
+echo "$DEVICE_NAME" | sudo tee /etc/hostname > /dev/null
 
-# STEP 2 — System update
-info "Updating system packages (this may take a few minutes)..."
-apt-get update -y
-apt-get upgrade -y
-ok "System updated"
+# --- Update system ---
+echo "[2/9] Updating system..."
+sudo apt update && sudo apt upgrade -y
 
-# STEP 3 — Dependencies
-info "Installing system dependencies..."
-apt-get install -y \
-    git \
-    python3-pip \
-    python3-smbus2 \
-    python3-pil \
-    python3-spidev \
-    python3-libgpiod \
-    python3-pygame \
-    i2c-tools \
-    network-manager
-ok "System dependencies installed"
+# --- Install dependencies ---
+echo "[3/9] Installing dependencies..."
+sudo apt install -y git python3-pip python3-pil python3-pygame python3-smbus2 \
+  python3-flask network-manager
 
-# STEP 4 — I2C and SPI (first pass)
-info "Enabling I2C interface..."
-raspi-config nonint do_i2c 0
-ok "I2C enabled"
+# --- Install Whisplay driver ---
+echo "[4/9] Installing Whisplay HAT driver..."
+cd /home/pi
+git clone https://github.com/PiSugar/Whisplay.git --depth 1
+cd /home/pi/Whisplay/Driver
+sudo bash install_wm8960_drive.sh
+echo "Whisplay install done. Continuing (reboot comes at the end)..."
 
-info "Enabling SPI interface..."
-raspi-config nonint do_spi 0
-ok "SPI enabled"
+# --- Install PiSugar 3 driver ---
+echo "[5/9] Installing PiSugar 3 driver..."
+curl http://cdn.pisugar.com/release/pisugar-power-manager.sh | sudo bash
+# Configure auto-shutdown at 15% battery, 60s delay
+# (PiSugar web UI at :8421 can be used to verify/adjust)
 
-# STEP 5 — Whisplay HAT driver
-info "Cloning Whisplay HAT driver..."
-cd "$HOME_DIR"
-if [ ! -d "$HOME_DIR/Whisplay" ]; then
-    sudo -u pi git clone https://github.com/PiSugar/Whisplay.git --depth 1
-    ok "Whisplay repo cloned"
-else
-    ok "Whisplay repo already exists, skipping"
-fi
+# --- Re-enable I2C and SPI AFTER PiSugar (it breaks SPI) ---
+echo "[6/9] Re-enabling I2C and SPI..."
+sudo raspi-config nonint do_i2c 0
+sudo raspi-config nonint do_spi 0
+echo "I2C and SPI re-enabled."
 
-info "Installing Whisplay driver (screen + audio)..."
-cd "$HOME_DIR/Whisplay/Driver"
-bash install_wm8960_drive.sh
-ok "Whisplay driver installed"
+# --- Clone PFE repo ---
+echo "[7/9] Cloning PFE repo..."
+REPO_DIR="/home/pi/pfe-sensor"
+# Store PAT in git credentials
+sudo git config --global credential.helper store
+echo "https://Zietgeist:${GITHUB_PAT}@github.com" | sudo tee /root/.git-credentials > /dev/null
 
-# STEP 6 — PiSugar 3 driver + auto-shutdown
-info "Installing PiSugar 3 power manager..."
-debconf-set-selections <<< "pisugar-poweroff pisugar-poweroff/model select PiSugar 3"
-wget -q -O /tmp/pisugar-power-manager.sh https://cdn.pisugar.com/release/pisugar-power-manager.sh
-DEBIAN_FRONTEND=noninteractive bash /tmp/pisugar-power-manager.sh -c release
-ok "PiSugar driver installed"
-
-info "Configuring auto-shutdown on low battery..."
-CONFIG="/etc/pisugar-server/config.json"
-for i in {1..10}; do
-    [ -f "$CONFIG" ] && break
-    sleep 2
-done
-
-if [ ! -f "$CONFIG" ]; then
-    err "PiSugar config not found at $CONFIG — driver may not have installed correctly"
-fi
-
-python3 - <<PYEOF
-import json
-with open("$CONFIG", 'r') as f:
-    config = json.load(f)
-config['auto_shutdown_level'] = 15
-config['auto_shutdown_delay'] = 60
-with open("$CONFIG", 'w') as f:
-    json.dump(config, f, indent=2)
-print("Config updated")
-PYEOF
-
-systemctl restart pisugar-server
-ok "Auto-shutdown set: triggers at 15% battery, 60s delay"
-
-# STEP 6b — Re-enable SPI after PiSugar
-# PiSugar install can silently break SPI — must re-enable after
-info "Re-enabling SPI after PiSugar install..."
-raspi-config nonint do_spi 0
-ok "SPI re-enabled"
-
-# STEP 7 — Clone PFE repo
-info "Cloning PFE sensor repo..."
 if [ ! -d "$REPO_DIR" ]; then
-    sudo -u pi git clone "$REPO_URL" "$REPO_DIR"
-    ok "PFE repo cloned to $REPO_DIR"
-else
-    info "PFE repo already exists, pulling latest..."
-    cd "$REPO_DIR"
-    sudo -u pi git pull
-    ok "PFE repo updated"
+  sudo git clone "https://Zietgeist:${GITHUB_PAT}@github.com/Zietgeist/pfe-sensor.git" "$REPO_DIR"
 fi
+sudo chown -R pi:pi "$REPO_DIR"
+sudo git config --global --add safe.directory "$REPO_DIR"
 
-# Fix git ownership — repo owned by pi but service runs as root
-git config --global --add safe.directory "$REPO_DIR"
-ok "Git safe directory configured"
+# --- Clear stale nmcli connections ---
+echo "[8/9] Clearing stale WiFi connections..."
+sudo nmcli connection delete PFE-NET 2>/dev/null || true
+sudo nmcli connection delete PFE-home 2>/dev/null || true
+echo "Stale connections cleared."
 
-# STEP 7b — Set PFE-home as preferred network (highest priority)
-info "Setting PFE-home as preferred network..."
-nmcli connection modify PFE-home connection.autoconnect-priority 100 \
-    && ok "PFE-home priority set to 100" \
-    || info "PFE-home connection not found — skipping (make sure it was set in RPi Imager)"
-
-# STEP 8 — Systemd service
-info "Installing systemd service..."
-cat > /etc/systemd/system/pfe-sensor.service <<SVCEOF
+# --- Install systemd service ---
+echo "[9/9] Installing autostart service..."
+sudo tee /etc/systemd/system/pfe-sensor.service > /dev/null <<EOF
 [Unit]
-Description=PFE Sensor — auto-update and run ($DEVICE_NAME)
-After=network-online.target
-Wants=network-online.target
+Description=PFE Sensor — auto-update and run
+After=time-sync.target
+Wants=time-sync.target
 
 [Service]
 Type=simple
 User=root
-ExecStart=/bin/bash $REPO_DIR/update_and_run.sh
+ExecStart=/bin/bash /home/pi/pfe-sensor/update_and_run.sh
+WorkingDirectory=/home/pi/pfe-sensor
 Restart=on-failure
 RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-SVCEOF
+EOF
 
-systemctl daemon-reload
-systemctl enable pfe-sensor.service
-ok "Service installed and enabled"
+sudo systemctl daemon-reload
+sudo systemctl enable pfe-sensor.service
 
 echo ""
-echo "============================================="
-echo -e " ${GREEN}$DEVICE_NAME setup complete!${NC}"
-echo "============================================="
+echo "================================================"
+echo " $DEVICE_NAME setup complete!"
 echo ""
-echo " What happens on next reboot:"
-echo "   1. Pi waits for network"
-echo "   2. Git pulls latest code from GitHub"
-echo "   3. Runs pressure_display.py automatically"
-echo ""
-echo " Useful commands:"
-echo "   Watch logs:     tail -f $HOME_DIR/pfe_update.log"
-echo "   Service status: systemctl status pfe-sensor"
-echo "   Start manually: systemctl start pfe-sensor"
-echo "   Battery level:  python3 -c \"import socket; s=socket.socket(); s.connect(('127.0.0.1',8423)); s.send(b'get battery\n'); print(s.recv(64).decode()); s.close()\""
-echo ""
-echo " Battery auto-shutdown: 15% (60 second delay)"
-echo " PiSugar WebUI: http://<this-pi-ip>:8421"
-echo ""
-read -p " Reboot now? [y/N]: " DO_REBOOT
-if [[ "$DO_REBOOT" =~ ^[Yy]$ ]]; then
-    reboot
-fi
+echo " Next steps:"
+echo "   1. Verify PiSugar auto-shutdown is set to 15% / 60s"
+echo "      (visit http://$(hostname -I | awk '{print $1}'):8421)"
+echo "   2. Reboot: sudo reboot"
+echo "   3. After reboot, check: cat /home/pi/pfe_update.log"
+echo "================================================"
