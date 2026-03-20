@@ -14,8 +14,11 @@ echo "Setting up $DEVICE_NAME..."
 echo ""
 # --- Set hostname ---
 echo "[1/8] Setting hostname to $DEVICE_NAME..."
-sudo hostnamectl set-hostname "$DEVICE_NAME"
+sudo hostnamectl set-hostname "$DEVICE_NAME" || echo "hostnamectl failed, using fallback..."
 echo "$DEVICE_NAME" | sudo tee /etc/hostname > /dev/null
+# Update /etc/hosts so the new hostname resolves locally
+sudo sed -i "s/127\.0\.1\.1.*/127.0.1.1\t$DEVICE_NAME/" /etc/hosts
+echo "Hostname set to $DEVICE_NAME."
 # --- Update system ---
 echo "[2/8] Updating system..."
 sudo apt update && sudo apt upgrade -y
