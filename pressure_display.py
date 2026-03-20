@@ -1070,10 +1070,12 @@ if errors:
     
     # Use board's button callback instead of raw GPIO
     button_pressed = threading.Event()
-    board.button_press_callback = lambda: button_pressed.set()
+    def _err_button_up():
+        button_pressed.set()
+    board.on_button_release(_err_button_up)
     print("Waiting for button press to continue...")
     button_pressed.wait()
-    board.button_press_callback = None
+    board.on_button_release(button_up)  # restore normal handler
     print("Button pressed — continuing despite errors")
 
 threading.Thread(target=screen_thread, args=(board, None), daemon=True).start()
