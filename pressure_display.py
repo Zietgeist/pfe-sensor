@@ -1079,6 +1079,7 @@ threading.Thread(target=lambda: (
 with SMBus(1) as bus:
     init_sensor(bus)
     do_zeroing(bus)
+    time.sleep(2) 
     errors = self_test(board)
 
     if errors:
