@@ -816,6 +816,17 @@ def make_screen_boot(stage, temp_c, zone, temp_clicks_count, zone_clicks_count, 
     draw_battery_bar(draw, batt)
     return image_to_pixels(img)
 
+def get_own_ip():
+    try:
+        result = subprocess.run(['ip', '-4', 'addr', 'show', 'wlan0'],
+                                capture_output=True, text=True)
+        for line in result.stdout.splitlines():
+            if 'inet ' in line:
+                return line.strip().split()[1].split('/')[0]
+    except Exception:
+        pass
+    return None
+
 def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
     img  = Image.new('RGB', (240, 280), (0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -875,7 +886,7 @@ def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
     elif mode == "client":
         draw.text((6, 245), "Reporting to host", font=f_tiny, fill=(100,180,255))
 
-    ip = get_host_ip()
+    ip = get_own_ip()
     draw.text((6, 260), f"http://{ip}" if ip else "...",
               font=f_tiny, fill=(100,180,255) if ip else (160,160,160))
 
