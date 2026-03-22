@@ -826,12 +826,12 @@ def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
     f_small = _font(fp, fr, 14, False)
     f_tiny  = _font(fp, fr, 12, False)
 
-    mode_colors = {"home":(100,200,100), "host":(200,150,50),
-                   "client":(100,180,255), "client_reporting":(100,180,255),  # ← add this
-                   "searching":(160,160,160)}
+    mode_colors = {"home":(100,200,100), "host":(0,230,0),
+                   "client":(0,230,0), "client_reporting":(0,230,0),
+                   "searching":(255,200,50)}
     mode_labels = {"home":"HOME", "host":"HOST",
-                   "client":"CLIENT", "client_reporting":"CLIENT",  # ← and this
-                   "searching":"..."}
+                   "client":"CLIENT", "client_reporting":"CLIENT",
+                   "searching":"NEGOTIATING"}
     draw.text((6, 4), DEVICE_NAME, font=f_small, fill=(120,120,255))
     draw.text((160,4), mode_labels.get(mode,"?"), font=f_small,
               fill=mode_colors.get(mode,(160,160,160)))
