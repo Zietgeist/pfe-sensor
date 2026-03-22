@@ -981,7 +981,6 @@ async function refresh() {
   try {
     const res  = await fetch('/data');
     const data = await res.json();
-    const now  = Date.now() / 1000;
     const names = Object.keys(data).sort();
     const grid = document.getElementById('grid');
     if (!names.length) {
@@ -990,7 +989,7 @@ async function refresh() {
     }
     grid.innerHTML = names.map(name => {
       const s     = data[name];
-      const stale = (now - s.time) > 30;
+      const stale = s.age > 30;
       const badge = stale ? '<span class="badge badge-offline">OFFLINE</span>' : '';
       return `<div class="card">
         <div class="card-top"><span class="card-name">${name}</span>${badge}</div>
