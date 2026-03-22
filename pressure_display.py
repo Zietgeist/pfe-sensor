@@ -1082,19 +1082,6 @@ with SMBus(1) as bus:
     time.sleep(2) 
     errors = self_test(board)
 
-    if errors:
-        err_screen = make_error_screen(errors)
-        board.draw_image(0, 0, 240, 280, err_screen)
-        print(f"SELF TEST FAILED: {errors}")
-        button_pressed = threading.Event()
-        def _err_button_up():
-            button_pressed.set()
-        board.on_button_release(_err_button_up)
-        print("Waiting for button press to continue...")
-        button_pressed.wait()
-        board.on_button_release(button_up)
-        print("Button pressed — continuing despite errors")
-
     while True:
         p1_raw, t1 = read_sdp_raw(bus, SDP_ADDR_1)
         p2_raw, t2 = read_sdp_raw(bus, SDP_ADDR_2)
