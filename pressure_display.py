@@ -1003,6 +1003,7 @@ async function refresh() {
         </div>
       </div>`;
     }).join('');
+    document.getElementById('sub').textContent = names.length + ' device(s) online';
     document.getElementById('footer').textContent = 'Updated: ' + new Date().toLocaleTimeString();
   } catch(e) {
     document.getElementById('footer').textContent = 'Connection lost...';
@@ -1099,7 +1100,7 @@ with SMBus(1) as bus:
             current_temp2     = t2
 
         print(f"DEBUG: wifi_mode={wifi_mode} boot_stage={boot_stage}")
-        if wifi_mode == "host" and boot_stage == "running":
+        if wifi_mode == "host":
             with lock:
                 sensor_data[DEVICE_NAME] = {
                     's1':   p1,
@@ -1110,7 +1111,7 @@ with SMBus(1) as bus:
                     'time': time.time(),
                 }
 
-        if wifi_mode == "client" and boot_stage == "running":
+        if wifi_mode == "client":
             host_ip = get_host_ip()
             if host_ip:
                 threading.Thread(target=report_data_loop,
