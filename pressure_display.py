@@ -1112,7 +1112,7 @@ with SMBus(1) as bus:
                 }
 
         if wifi_mode == "client":
-            host_ip = get_host_ip()
+            host_ip = HOST_IP
             if host_ip:
                 threading.Thread(target=report_data_loop,
                                  args=(host_ip,), daemon=True).start()
