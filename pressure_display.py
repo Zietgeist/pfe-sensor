@@ -335,11 +335,11 @@ def create_hotspot():
 
 def get_host_ip():
     try:
-        result = subprocess.run(['ip', '-4', 'addr', 'show', 'wlan0'],
+        result = subprocess.run(['ip', 'route', 'show', 'default', 'dev', 'wlan0'],
                                 capture_output=True, text=True)
         for line in result.stdout.splitlines():
-            if 'inet ' in line:
-                return line.strip().split()[1].split('/')[0]
+            if 'default' in line:
+                return line.split()[2]
     except Exception:
         pass
     return None
