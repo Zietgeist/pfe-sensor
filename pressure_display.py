@@ -356,6 +356,28 @@ def already_connected_to():
         pass
     return None
 
+def get_my_mac():
+    try:
+        result = subprocess.run(['cat', '/sys/class/net/wlan0/address'],
+                                capture_output=True, text=True)
+        return result.stdout.strip()
+    except Exception:
+        return "ff:ff:ff:ff:ff:ff"
+
+def scan_mac_addresses():
+    try:
+        result = subprocess.run(
+            ['sudo', 'nmcli', '-t', '-f', 'BSSID', 'dev', 'wifi', 'list', '--rescan', 'yes'],
+            capture_output=True, text=True, timeout=20)
+        macs = []
+        for line in result.stdout.splitlines():
+            mac = line.strip().lower()
+            if len(mac) == 17:
+                macs.append(mac)
+        return macs
+    except Exception:
+        return []
+
 def setup_wifi():
     global wifi_mode
     current = already_connected_to()
@@ -371,6 +393,16 @@ def setup_wifi():
     if scan_for(SITE_SSID):
         if connect_to(SITE_SSID, SITE_PASSWORD):
             wifi_mode = "client"; return "client"
+    # MAC tiebreaker — lowest MAC becomes host
+    my_mac = get_my_mac()
+    nearby_macs = scan_mac_addresses()
+    if any(mac < my_mac for mac in nearby_macs):
+        # Someone else has a lower MAC — wait for them to create hotspot
+        print(f"MAC tiebreaker: waiting for lower MAC to host")
+        time.sleep(10)
+        if scan_for(SITE_SSID):
+            if connect_to(SITE_SSID, SITE_PASSWORD):
+                wifi_mode = "client"; return "client"
     if create_hotspot():
         wifi_mode = "host"; return "host"
     wifi_mode = "searching"; return "searching"
