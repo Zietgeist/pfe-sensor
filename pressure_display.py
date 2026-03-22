@@ -851,7 +851,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/data':
             with lock:
-                data = dict(sensor_data)
+                now = time.time()
+                data = {
+                    k: {**v, 'age': now - v['time']}
+                    for k, v in sensor_data.items()
+                }
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
