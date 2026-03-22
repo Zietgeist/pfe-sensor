@@ -55,10 +55,10 @@ WEB_PORT      = 80
 ZONE_MILD     = "mild"
 ZONE_MODERATE = "moderate"
 ZONE_SEVERE   = "severe"
-DEFAULT_ZONE  = ZONE_MODERATE
+DEFAULT_ZONE  = ZONE_SEVERE
 
 HOLD_SECONDS  = 2.0
-ZERO_SAMPLES  = 50
+ZERO_SAMPLES  = 5
 CLICK_TIMEOUT = 3.0   # seconds of silence before clicks are processed
 
 # Temp band click map:
@@ -414,19 +414,69 @@ def celsius_to_fahrenheit(c):
 
 def do_zeroing(bus):
     global zero_offset1, zero_offset2, boot_stage
+    global temp_band_choice, outdoor_temp_f
     print("Zeroing sensors...")
     samples1, samples2 = [], []
+    temp_samples = []
     for _ in range(ZERO_SAMPLES):
-        p1, _ = read_sdp_raw(bus, SDP_ADDR_1)
-        p2, _ = read_sdp_raw(bus, SDP_ADDR_2)
+        p1, t1 = read_sdp_raw(bus, SDP_ADDR_1)
+        p2, t2 = read_sdp_raw(bus, SDP_ADDR_2)
         if p1 is not None: samples1.append(p1)
         if p2 is not None: samples2.append(p2)
+        for t in [t1, t2]:
+            if t is not None: temp_samples.append(t)
         time.sleep(0.05)
     with lock:
         zero_offset1 = sum(samples1) / len(samples1) if samples1 else 0.0
         zero_offset2 = sum(samples2) / len(samples2) if samples2 else 0.0
-        boot_stage   = "pick_temp"
+    # Auto-resolve temp from sensor
+    if temp_samples:
+        avg_c = sum(temp_samples) / len(temp_samples)
+        temp_f = celsius_to_fahrenheit(avg_c)
+    else:
+        temp_f = 50.0
+    resolved_band = temp_band_from_f(temp_f)
+    with lock:
+        temp_band_choice = resolved_band
+        outdoor_temp_f   = temp_f
+        boot_stage       = "pick_temp"
     print(f"Zero offsets — S1: {zero_offset1:.3f}  S2: {zero_offset2:.3f}")
+    print(f"Auto temp: {temp_f:.1f}°F → band {resolved_band}")
+    # Start 3s countdown — if no button press, skip to pick_zone
+    _start_temp_default_timer()
+
+def _start_temp_default_timer():
+    global _temp_click_timer
+    if _temp_click_timer is not None:
+        _temp_click_timer.cancel()
+    _temp_click_timer = threading.Timer(3.0, _temp_default_accept)
+    _temp_click_timer.start()
+
+def _temp_default_accept():
+    global boot_stage, _temp_click_timer
+    with lock:
+        if boot_stage != "pick_temp":
+            return
+        boot_stage = "pick_zone"
+        _temp_click_timer = None
+    print("Temp defaulted to sensor reading")
+    _start_zone_default_timer()
+
+def _start_zone_default_timer():
+    global _zone_click_timer
+    if _zone_click_timer is not None:
+        _zone_click_timer.cancel()
+    _zone_click_timer = threading.Timer(3.0, _zone_default_accept)
+    _zone_click_timer.start()
+
+def _zone_default_accept():
+    global boot_stage, _zone_click_timer
+    with lock:
+        if boot_stage != "pick_zone":
+            return
+        boot_stage = "lock_baseline"
+        _zone_click_timer = None
+    print(f"Zone defaulted to: {climate_zone}")
 
 def _resolve_temp_band(clicks):
     """
@@ -439,7 +489,7 @@ def _resolve_temp_band(clicks):
     return TEMP_CLICK_BANDS[c]
 
 def _temp_timeout():
-    """Called 3s after last click in pick_temp stage — commit the choice."""
+    """Called 3s after last MANUAL click in pick_temp — commit the choice."""
     global boot_stage, temp_band_choice, outdoor_temp_f, _temp_click_timer
     with lock:
         if boot_stage != "pick_temp":
@@ -447,38 +497,34 @@ def _temp_timeout():
         clicks = temp_clicks
         t1     = current_temp1
         t2     = current_temp2
-
     band = _resolve_temp_band(clicks)
-
     if band == "auto":
-        # Use thermometer average
         temps = [t for t in [t1, t2] if t is not None]
         if temps:
             avg_c  = sum(temps) / len(temps)
             temp_f = celsius_to_fahrenheit(avg_c)
         else:
-            temp_f = 50.0   # safe fallback if no sensor reads
+            temp_f = 50.0
         resolved_band = temp_band_from_f(temp_f)
-        print(f"Auto temp: {temp_f:.1f}°F → band {resolved_band}")
     else:
         temp_f        = TEMP_BAND_MIDPOINT_F[band]
         resolved_band = band
-        print(f"Manual temp: {clicks} clicks → band {resolved_band}")
-
     with lock:
         temp_band_choice = resolved_band
         outdoor_temp_f   = temp_f
         boot_stage       = "pick_zone"
         _temp_click_timer = None
-
+    print(f"Temp manually set: {temp_f:.1f}°F → {resolved_band}")
+    _start_zone_default_timer()
+            
 def _zone_timeout():
-    """Called 3s after last click in pick_zone stage — commit zone."""
+    """Called 3s after last MANUAL click in pick_zone — commit zone."""
     global boot_stage, _zone_click_timer
     with lock:
         if boot_stage == "pick_zone":
             boot_stage = "lock_baseline"
             _zone_click_timer = None
-            print(f"Zone locked: {climate_zone}")
+    print(f"Zone manually set: {climate_zone}")
 
 def advance_boot_stage():
     """Called on every short button press during boot."""
@@ -490,24 +536,27 @@ def advance_boot_stage():
         stage = boot_stage
 
     if stage == "pick_temp":
-        # Cancel existing timer, increment clicks, restart timer
+        # Cancel default timer, start manual click selection
+        if _temp_click_timer is not None:
+            _temp_click_timer.cancel()
+            _temp_click_timer = None
         with lock:
             temp_clicks += 1
             clicks = temp_clicks
-        if _temp_click_timer is not None:
-            _temp_click_timer.cancel()
         _temp_click_timer = threading.Timer(CLICK_TIMEOUT, _temp_timeout)
         _temp_click_timer.start()
         print(f"Temp click {clicks} → {TEMP_CLICK_BANDS.get(min(5,clicks), '?')}")
 
     elif stage == "pick_zone":
+        # Cancel default timer, start manual click selection
+        if _zone_click_timer is not None:
+            _zone_click_timer.cancel()
+            _zone_click_timer = None
         with lock:
             zone_clicks += 1
             zc = zone_clicks
             zones = [ZONE_MILD, ZONE_MODERATE, ZONE_SEVERE]
             climate_zone = zones[(zc - 1) % 3]
-        if _zone_click_timer is not None:
-            _zone_click_timer.cancel()
         _zone_click_timer = threading.Timer(CLICK_TIMEOUT, _zone_timeout)
         _zone_click_timer.start()
         print(f"Zone click {zc} → {climate_zone}")
@@ -672,39 +721,31 @@ def make_screen_boot(stage, temp_c, zone, temp_clicks_count, zone_clicks_count, 
         draw.text((20, 90), "Please wait", font=f_tiny, fill=(120, 120, 120))
 
     elif stage == "pick_temp":
+        with lock:
+            tf = outdoor_temp_f
+            tc = temp_clicks
         draw.text((6, 32), "Outdoor temp?", font=f_med, fill=(200, 200, 255))
-
-        # Show current selection based on clicks so far
-        clicks = temp_clicks_count
-        if clicks == 0:
-            # Nothing clicked yet — show the options
-            draw.text((6,  68), "1 click  = AUTO (thermometer)", font=f_tiny, fill=(100, 220, 255))
-            draw.text((6,  86), "2 clicks = below -4\u00b0F",          font=f_tiny, fill=(150, 150, 200))
-            draw.text((6, 104), "3 clicks = -4\u00b0F to 14\u00b0F",    font=f_tiny, fill=(150, 150, 200))
-            draw.text((6, 122), "4 clicks = 14\u00b0F to 32\u00b0F",    font=f_tiny, fill=(150, 150, 200))
-            draw.text((6, 140), "5 clicks = above 32\u00b0F",           font=f_tiny, fill=(150, 150, 200))
-            draw.text((6, 200), "Press to begin", font=f_tiny, fill=(180, 180, 80))
+        if tc == 0:
+            # Showing default countdown
+            temp_f = celsius_to_fahrenheit(temp_c) if temp_c is not None else tf
+            label = f"AUTO: {temp_f:.0f}°F" if temp_f is not None else "AUTO: --°F"
+            draw.text((6, 75), label, font=f_med, fill=(100, 220, 255))
+            draw.text((6, 110), "Defaulting in 3s...", font=f_small, fill=(180, 180, 80))
+            draw.text((6, 135), "Press to change", font=f_tiny, fill=(150, 150, 150))
         else:
-            # Show what's selected so far
-            c = min(5, clicks)
+            c = min(5, tc)
             band = TEMP_CLICK_BANDS[c]
             if band == "auto":
                 temp_f = celsius_to_fahrenheit(temp_c) if temp_c is not None else None
-                if temp_f is not None:
-                    label = f"AUTO: {temp_f:.0f}\u00b0F"
-                else:
-                    label = "AUTO: --\u00b0F"
+                label = f"AUTO: {temp_f:.0f}°F" if temp_f is not None else "AUTO: --°F"
                 color = (100, 220, 255)
             else:
                 label = TEMP_BAND_LABELS[band]
                 color = (200, 220, 100)
-
-            # Click counter dots
             dot_x = 6
             for i in range(5):
                 col = (255, 200, 50) if i < c else (50, 50, 50)
                 draw.ellipse([dot_x + i*22, 58, dot_x + i*22 + 14, 72], fill=col)
-
             draw.text((6, 82), label, font=f_med, fill=color)
             draw.text((6, 200), "Wait 3s to confirm", font=f_tiny, fill=(180, 180, 80))
 
@@ -715,12 +756,14 @@ def make_screen_boot(stage, temp_c, zone, temp_clicks_count, zone_clicks_count, 
         draw.text((6, 32), "Climate zone?", font=f_med, fill=(200, 200, 255))
         colors = {ZONE_MILD: (100,255,100), ZONE_MODERATE: (255,200,50), ZONE_SEVERE: (255,80,80)}
         draw.text((6, 68), current.upper(), font=f_big, fill=colors.get(current, (200,200,200)))
-        draw.text((6, 130), "1 click  = Mild",     font=f_tiny, fill=(150,150,150))
-        draw.text((6, 148), "2 clicks = Moderate",  font=f_tiny, fill=(150,150,150))
-        draw.text((6, 166), "3 clicks = Severe",    font=f_tiny, fill=(150,150,150))
-        draw.text((6, 210), "Wait 3s to confirm",   font=f_tiny, fill=(180,180,80))
-
-        # Show selected temp band as reminder
+        if zc == 0:
+            draw.text((6, 130), "Defaulting in 3s...", font=f_small, fill=(180, 180, 80))
+            draw.text((6, 155), "Press to change", font=f_tiny, fill=(150, 150, 150))
+        else:
+            draw.text((6, 130), "1 click  = Mild",     font=f_tiny, fill=(150,150,150))
+            draw.text((6, 148), "2 clicks = Moderate",  font=f_tiny, fill=(150,150,150))
+            draw.text((6, 166), "3 clicks = Severe",    font=f_tiny, fill=(150,150,150))
+            draw.text((6, 210), "Wait 3s to confirm",   font=f_tiny, fill=(180,180,80))
         if temp_band_chosen:
             draw.text((6, 254), f"Temp: {TEMP_BAND_LABELS.get(temp_band_chosen,'?')}",
                       font=f_tiny, fill=(80,80,160))
