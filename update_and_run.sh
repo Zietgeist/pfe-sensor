@@ -17,7 +17,7 @@ fi
 
 cd "$REPO_DIR"
 git fetch origin main >> "$LOG" 2>&1 || echo "Fetch failed, continuing" >> "$LOG"
-git reset --hard origin/main >> "$LOG" 2>&1 || echo "Reset failed, continuing" >> "$LOG"
+git pull origin main >> "$LOG" 2>&1 || echo "Pull failed, continuing" >> "$LOG"
 echo "Code updated." >> "$LOG"
 
 exec python3 "$MAIN_SCRIPT" >> "$LOG" 2>&1
