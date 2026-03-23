@@ -254,15 +254,9 @@ _zone_click_timer = None
 
 def read_battery():
     try:
-        s = socket.socket()
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(1)
-        s.connect(('127.0.0.1', 8423))
-        s.send(b'get battery\n')
-        data = s.recv(64).decode().strip()
-        s.close()
-        return float(data.split(':')[1].strip())
-    except Exception:
-        return None
+        s.connect('/tmp/pisugar-server.sock')
 
 def battery_poll_loop():
     global current_battery
