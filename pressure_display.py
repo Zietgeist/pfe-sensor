@@ -257,6 +257,12 @@ def read_battery():
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(1)
         s.connect('/tmp/pisugar-server.sock')
+        s.sendall(b'get battery\n')
+        data = s.recv(64).decode()
+        s.close()
+        return max(0.0, min(100.0, float(data.split(':')[1].strip())))
+    except Exception:
+        return None
 
 def battery_poll_loop():
     global current_battery
