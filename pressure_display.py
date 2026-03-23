@@ -669,6 +669,30 @@ def button_up():
 # Screen drawing
 # =============================================================
 
+def get_battery_pct():
+    """Read battery % from PiSugar via Unix socket."""
+    try:
+        import socket
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            s.connect('/tmp/pisugar-server.sock')
+            s.sendall(b'get battery\n')
+            data = s.recv(64).decode()
+            return max(0, min(100, float(data.split(':')[1].strip())))
+    except Exception:
+        return None
+def draw_battery_bar(draw, batt):
+    """Draw a small battery icon in the top-right corner of the screen."""
+    if batt is None:
+        return
+    bx, by, bw, bh = 208, 5, 26, 14
+    draw.rectangle([bx, by, bx+bw, by+bh], outline=(100, 100, 100))
+    draw.rectangle([bx+bw, by+4, bx+bw+3, by+bh-4], fill=(100, 100, 100))
+    fill_w = int((bw - 2) * batt / 100)
+    color = (0, 200, 80) if batt > 50 else (220, 180, 0) if batt > 20 else (220, 50, 50)
+    if fill_w > 0:
+        draw.rectangle([bx+1, by+1, bx+1+fill_w, by+bh-1], fill=color)
+
 def load_splash():
     try:
         img = Image.open('/home/pi/pfe-sensor/marten_screen.png').convert('RGB')
