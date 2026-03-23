@@ -293,8 +293,9 @@ def draw_battery_bar(draw, pct):
 
 
 # =============================================================
-# WiFi
+# WiFi / BLE host negotiation
 # =============================================================
+
 
 def scan_for(ssid, retries=2):
     for _ in range(retries):
@@ -332,7 +333,7 @@ def create_hotspot():
     except Exception as e:
         print(f"Hotspot error: {e}")
         return False
-
+                
 def get_host_ip():
     try:
         result = subprocess.run(['ip', 'route', 'show', 'default', 'dev', 'wlan0'],
@@ -343,7 +344,7 @@ def get_host_ip():
     except Exception:
         pass
     return None
-
+            
 def already_connected_to():
     try:
         result = subprocess.run(
@@ -356,57 +357,129 @@ def already_connected_to():
         pass
     return None
 
+
 def get_my_mac():
     try:
-        result = subprocess.run(['cat', '/sys/class/net/wlan0/address'],
-                                capture_output=True, text=True)
-        return result.stdout.strip()
+        result = subprocess.run(
+            ['cat', '/sys/class/net/wlan0/address'],
+            capture_output=True, text=True)
+        return result.stdout.strip().lower()
     except Exception:
         return "ff:ff:ff:ff:ff:ff"
 
-def scan_mac_addresses():
+def ble_advertise_start():
+    """Make this device discoverable over BLE with its hostname as the name."""
     try:
-        result = subprocess.run(
-            ['sudo', 'nmcli', '-t', '-f', 'BSSID', 'dev', 'wifi', 'list', '--rescan', 'yes'],
-            capture_output=True, text=True, timeout=20)
-        macs = []
-        for line in result.stdout.splitlines():
-            mac = line.strip().lower()
-            if len(mac) == 17:
-                macs.append(mac)
-        return macs
+        subprocess.run(['sudo', 'bluetoothctl', 'power', 'on'],
+                       capture_output=True, timeout=5)
+        subprocess.run(['sudo', 'bluetoothctl', 'discoverable', 'yes'],
+                       capture_output=True, timeout=5)
+        subprocess.run(['sudo', 'bluetoothctl', 'discoverable-timeout', '60'],
+                       capture_output=True, timeout=5)
+        # Set the BLE device name to our hostname so other PFEs can identify us
+        subprocess.run(['sudo', 'bluetoothctl', 'system-alias', DEVICE_NAME],
+                       capture_output=True, timeout=5)
+        print(f"BLE advertising as {DEVICE_NAME}")
+    except Exception as e:
+        print(f"BLE advertise error: {e}")
+
+def ble_advertise_stop():
+    try:
+        subprocess.run(['sudo', 'bluetoothctl', 'discoverable', 'no'],
+                       capture_output=True, timeout=5)
     except Exception:
-        return []
+        pass
+
+def ble_scan_for_pfe(duration=5):
+    found = []
+    try:
+        proc = subprocess.Popen(
+            ['sudo', 'bluetoothctl'],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True
+        )
+        proc.stdin.write('scan on\n')
+        proc.stdin.flush()
+        time.sleep(duration)
+        proc.stdin.write('devices\n')
+        proc.stdin.flush()
+        time.sleep(0.5)
+        proc.stdin.write('scan off\nquit\n')
+        proc.stdin.close()                    # ← close stdin before communicate
+        output = proc.stdout.read()           # ← read stdout directly
+        proc.wait(timeout=5)                  # ← wait for process to exit
+
+        for line in output.splitlines():
+            if 'Device' in line and 'PFE-' in line:
+                parts = line.strip().split()
+                if len(parts) >= 3:
+                    mac  = parts[1].lower()
+                    name = parts[2]
+                    found.append((mac, name))
+                    print(f"BLE found: {name} at {mac}")
+    except Exception as e:
+        print(f"BLE scan error: {e}")
+    return found
+
+def ble_negotiate_host():
+    """
+    Use BLE to figure out who becomes host when no WiFi network exists yet.
+    Lowest MAC address wins and creates the hotspot.
+    Returns "host" or "client".
+    """
+    my_mac = get_my_mac()
+    print(f"My MAC: {my_mac} — starting BLE negotiation")
+
+    ble_advertise_start()
+    nearby = ble_scan_for_pfe(duration=5)
+    ble_advertise_stop()
+
+    # Check if any nearby PFE has a lower MAC than us
+    lower_exists = any(mac < my_mac for mac, name in nearby)
+
+    if lower_exists:
+        print("Another PFE has a lower MAC — waiting 12s for them to create hotspot")
+        time.sleep(12)
+        if scan_for(SITE_SSID):
+            if connect_to(SITE_SSID, SITE_PASSWORD):
+                return "client"
+        # Hotspot didn't appear — something went wrong, try hosting ourselves
+        print("No hotspot appeared — taking over as host")
+
+    print("I have the lowest MAC — creating hotspot")
+    if create_hotspot():
+        return "host"
+
+    return "searching"
+
 
 def setup_wifi():
     global wifi_mode
+
+    # 1. Home network?
     current = already_connected_to()
     if current == HOME_SSID:
         wifi_mode = "home"; return "home"
-    if current == SITE_SSID:
-        wifi_mode = "client"; return "client"
+
     if scan_for(HOME_SSID):
         if connect_to(HOME_SSID, HOME_PASSWORD):
             wifi_mode = "home"; return "home"
-    delay = random.uniform(1, 5)
-    time.sleep(delay)
+
+    # 2. Field network already exists?
+    current = already_connected_to()
+    if current == SITE_SSID:
+        wifi_mode = "client"; return "client"
+
     if scan_for(SITE_SSID):
         if connect_to(SITE_SSID, SITE_PASSWORD):
             wifi_mode = "client"; return "client"
-    # MAC tiebreaker — lowest MAC becomes host
-    my_mac = get_my_mac()
-    nearby_macs = scan_mac_addresses()
-    if any(mac < my_mac for mac in nearby_macs):
-        # Someone else has a lower MAC — wait for them to create hotspot
-        print(f"MAC tiebreaker: waiting for lower MAC to host")
-        time.sleep(10)
-        if scan_for(SITE_SSID):
-            if connect_to(SITE_SSID, SITE_PASSWORD):
-                wifi_mode = "client"; return "client"
-    if create_hotspot():
-        wifi_mode = "host"; return "host"
-    wifi_mode = "searching"; return "searching"
 
+    # 3. No network — use BLE to pick who hosts
+    result = ble_negotiate_host()
+    wifi_mode = result
+    return result
 
 # =============================================================
 # Sensor
