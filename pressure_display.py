@@ -414,11 +414,15 @@ def ble_scan_for_pfe(duration=5):
         for line in output.splitlines():
             if 'Device' in line and 'PFE-' in line:
                 parts = line.strip().split()
-                if len(parts) >= 3:
-                    mac  = parts[1].lower()
-                    name = parts[2]
+                # Find 'Device' keyword then grab next two items
+                try:
+                    idx = parts.index('Device')
+                    mac  = parts[idx + 1].lower()
+                    name = parts[idx + 2]
                     found.append((mac, name))
                     print(f"BLE found: {name} at {mac}")
+                except (ValueError, IndexError):
+                    pass
     except Exception as e:
         print(f"BLE scan error: {e}")
     return found
