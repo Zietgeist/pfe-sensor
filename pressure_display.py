@@ -718,6 +718,7 @@ def screen_thread(board, splash):
 
 if __name__ == '__main__':
     board  = WhisPlayBoard()
+    board.set_backlight(80)
     splash = load_splash()
     if splash:
         board.draw_image(0, 0, 240, 280, splash)
