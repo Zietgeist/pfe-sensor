@@ -712,16 +712,16 @@ def make_screen(p1, p2, target, mode):
 def screen_thread(board, splash):
     if splash:
         board.draw_image(0, 0, 240, 280, splash)
-    last = (None, None, None, None)
     while True:
         with lock:
             p1   = ds.current_pressure1
             p2   = ds.current_pressure2
             tgt  = ds.target_pressure
             mode = ds.wifi_mode
-        current = (round(p1, 1) if p1 else None,
-                   round(p2, 1) if p2 else None,
-                   tgt, mode)
+        screen_data = make_screen(p1, p2, tgt, mode)
+        board.draw_image(0, 0, 240, 280, screen_data)
+        time.sleep(1)
+
 
 
 # =============================================================
