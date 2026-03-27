@@ -616,36 +616,35 @@ h1 { text-align: center; margin-bottom: 4px; font-size: 1.5em; letter-spacing: 2
 .snap-table td.delta-fail { color:#ff6060; font-weight:700; }
 .snap-table td.na         { color:#2a3a5a; }
 .snap-table tr:hover td   { background:#0d1830; }
-.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; max-width:1100px; margin:0 auto; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:16px; max-width:1100px; margin:0 auto; }
 .card { background:#131c2e; border-radius:10px; padding:18px; border:1.5px solid #2a3a5c; }
-.card-top { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+.card-top { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
 .card-name { font-size:1em; font-weight:700; color:#c8d8f8; letter-spacing:1px; }
 .badge { font-size:0.7em; padding:3px 10px; border-radius:4px; font-weight:700; letter-spacing:1px; }
 .badge-offline { background:#1e2535; color:#a0b0cc; border:1px solid #3a4460; }
-.label-row { margin-bottom:12px; }
-.label-select { background:#0a0f1a; border:1px solid #2a3a5c; color:#a8c8ff;
-                font-family:'Courier New',monospace; font-size:0.8em; padding:4px 8px;
-                border-radius:4px; width:100%; cursor:pointer; }
-.label-custom { background:#0a0f1a; border:1px solid #2a3a5c; color:#a8c8ff;
-                font-family:'Courier New',monospace; font-size:0.8em; padding:4px 8px;
-                border-radius:4px; width:100%; margin-top:4px; display:none; }
-.label-custom:focus { outline:none; border-color:#4a7aff; }
 .sensors { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
 .sensor-box { background:#0d1525; border-radius:8px; padding:12px; text-align:center; border:1px solid #1e2e4a; }
 .sensor-box.pass { background:#0d1f17; border-color:#00c060; }
 .sensor-box.fail { background:#1f0d0d; border-color:#e03030; }
 .sensor-box.blue { background:#0d1530; border-color:#3060c0; }
-.sensor-label { font-size:0.65em; color:#a0b8d8; margin-bottom:6px; text-transform:uppercase; letter-spacing:1.5px; font-weight:700; }
+.sensor-label { font-size:0.65em; color:#a0b8d8; margin-bottom:4px; text-transform:uppercase; letter-spacing:1.5px; font-weight:700; }
 .sensor-box.pass .sensor-label { color:#00c060; }
 .sensor-box.fail .sensor-label { color:#e03030; }
 .sensor-box.blue .sensor-label { color:#5090ff; }
-.s-top { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+.s-top { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
 .s-badge { font-size:0.65em; padding:2px 7px; border-radius:3px; font-weight:700; }
 .s-badge-pass { background:#003d20; color:#00e874; border:1px solid #00c060; }
 .s-badge-fail { background:#3d0000; color:#ff6060; border:1px solid #e03030; }
 .sensor-value { font-size:1.8em; font-weight:700; }
 .pass-val { color:#00e874; } .fail-val { color:#ff6060; } .blue-val { color:#5090ff; } .na-val { color:#8899bb; }
 .sensor-sub { font-size:0.72em; margin-top:4px; color:#5a7aaa; }
+/* Per-sensor label input — always visible, stable, doesn't rebuild */
+.slabel-wrap { margin-top:6px; }
+.slabel-input { background:#0a0f1a; border:1px solid #1e2e4a; color:#a8c8ff;
+                font-family:'Courier New',monospace; font-size:0.75em; padding:3px 6px;
+                border-radius:3px; width:100%; text-align:left; }
+.slabel-input:focus { outline:none; border-color:#4a7aff; }
+.slabel-input::placeholder { color:#3a4a6a; }
 #footer { text-align:center; color:#4a5a7a; font-size:0.78em; margin-top:24px; }
 .no-sensors { text-align:center; color:#4a5a7a; margin-top:60px; grid-column:1/-1; }
   </style>
@@ -672,9 +671,9 @@ h1 { text-align: center; margin-bottom: 4px; font-size: 1.5em; letter-spacing: 2
     <div class="snap-table-title">SNAPSHOT COMPARISON</div>
     <table class="snap-table">
       <thead><tr>
-        <th class="col-left">DEVICE</th><th class="col-left">LOCATION</th>
-        <th>BASELINE S1</th><th>SUCTION S1</th><th>DELTA S1</th>
-        <th>BASELINE S2</th><th>SUCTION S2</th><th>DELTA S2</th>
+        <th class="col-left">DEVICE</th>
+        <th class="col-left">S1 LABEL</th><th>BASELINE S1</th><th>SUCTION S1</th><th>DELTA S1</th>
+        <th class="col-left">S2 LABEL</th><th>BASELINE S2</th><th>SUCTION S2</th><th>DELTA S2</th>
       </tr></thead>
       <tbody id="snap-tbody"></tbody>
     </table>
@@ -682,81 +681,172 @@ h1 { text-align: center; margin-bottom: 4px; font-size: 1.5em; letter-spacing: 2
   <div class="grid" id="grid"><div class="no-sensors">Waiting for sensors...</div></div>
   <div id="footer"></div>
   <script>
-const ROOM_OPTIONS = ["Utility Room","Crawlspace","Sump Pit","Under Stairs",
-                      "Storage Room","Mechanical Room","Garage","Other (type below)"];
+// Labels stored locally — keyed by "PFE-1-S1", "PFE-1-S2", etc.
+// Populated from server on first load, then maintained locally to avoid flicker.
+const localLabels = {};
 
 async function saveJob() {
   await fetch('/set_job',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({client_name:document.getElementById('client-name').value,
                          address:document.getElementById('address').value})});
 }
+
 async function takeSnapshot(which) {
   await fetch('/snapshot',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({which})});
 }
-async function setLabel(device, select) {
-  const label=select.value;
-  const ci=document.getElementById('custom-'+device);
-  if (label==='__custom__') { ci.style.display='block'; return; }
-  ci.style.display='none';
-  await sendLabel(device,label);
-}
-async function setCustomLabel(device,input) { await sendLabel(device,input.value); }
-async function sendLabel(device,label) {
+
+// Called when user finishes typing in a sensor label input (on blur or Enter)
+async function onLabelBlur(key, input) {
+  const label = input.value.trim();
+  localLabels[key] = label;
   await fetch('/set_label',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({device,label})});
+    body:JSON.stringify({device:key, label})});
 }
-function buildLabelSelect(device,currentLabel) {
-  const isCustom = currentLabel && !ROOM_OPTIONS.slice(0,-1).includes(currentLabel);
-  const opts = ROOM_OPTIONS.map(r => {
-    const val=r==='Other (type below)'?'__custom__':r;
-    return `<option value="${val}" ${currentLabel===r?'selected':''}>${r}</option>`;
-  }).join('');
-  return `<select class="label-select" onchange="setLabel('${device}',this)">
-    <option value="" ${!currentLabel?'selected':''}>-- Select Room --</option>${opts}
-  </select>
-  <input class="label-custom" id="custom-${device}" type="text" placeholder="Type room name..."
-    value="${isCustom?currentLabel:''}" style="display:${isCustom?'block':'none'}"
-    onchange="setCustomLabel('${device}',this)" onblur="setCustomLabel('${device}',this)" />`;
+
+function sensorBoxHTML(sensorKey, headerLabel, val, tgt, stale, currentLabel) {
+  // Value display
+  let boxCls, valHTML, subHTML, badgeHTML='';
+  if (stale || val===null || val===undefined) {
+    boxCls=''; valHTML='<div class="sensor-value na-val">--</div>'; subHTML='<div class="sensor-sub">&nbsp;</div>';
+  } else if (tgt===null || tgt===undefined) {
+    boxCls='blue'; valHTML=`<div class="sensor-value blue-val">${val.toFixed(2)} Pa</div>`; subHTML='<div class="sensor-sub">&nbsp;</div>';
+  } else {
+    const pass=val<=tgt;
+    boxCls=pass?'pass':'fail';
+    const vc=pass?'pass-val':'fail-val', bc=pass?'s-badge-pass':'s-badge-fail';
+    badgeHTML=`<span class="s-badge ${bc}">${pass?'PASS':'FAIL'}</span>`;
+    valHTML=`<div class="sensor-value ${vc}">${val.toFixed(2)} Pa</div>`;
+    subHTML=`<div class="sensor-sub">Target: ${tgt.toFixed(2)} Pa</div>`;
+  }
+  // Label input — use local value if we have it, else server value
+  const lbl = (sensorKey in localLabels) ? localLabels[sensorKey] : (currentLabel||'');
+  return `<div class="sensor-box ${boxCls}" id="box-${sensorKey}">
+    <div class="s-top"><span class="sensor-label">${headerLabel}</span>${badgeHTML}</div>
+    ${valHTML}${subHTML}
+    <div class="slabel-wrap">
+      <input class="slabel-input" id="lbl-${sensorKey}" type="text"
+        placeholder="Label this tube..." value="${lbl}"
+        onblur="onLabelBlur('${sensorKey}',this)"
+        onkeydown="if(event.key==='Enter')this.blur()" />
+    </div>
+  </div>`;
 }
-function sensorBox(label,val,tgt,stale) {
-  if (stale||val===null||val===undefined)
-    return `<div class="sensor-box"><div class="s-top"><span class="sensor-label">${label}</span></div>
-            <div class="sensor-value na-val">--</div><div class="sensor-sub">&nbsp;</div></div>`;
-  if (tgt===null||tgt===undefined)
-    return `<div class="sensor-box blue"><div class="s-top"><span class="sensor-label">${label}</span></div>
-            <div class="sensor-value blue-val">${val.toFixed(2)} Pa</div><div class="sensor-sub">&nbsp;</div></div>`;
-  const pass=val<=tgt, cls=pass?'pass':'fail', vc=pass?'pass-val':'fail-val', bc=pass?'s-badge-pass':'s-badge-fail';
-  return `<div class="sensor-box ${cls}">
-    <div class="s-top"><span class="sensor-label">${label}</span><span class="s-badge ${bc}">${pass?'PASS':'FAIL'}</span></div>
-    <div class="sensor-value ${vc}">${val.toFixed(2)} Pa</div>
-    <div class="sensor-sub">Target: ${tgt.toFixed(2)} Pa</div></div>`;
+
+function updateSensorBox(sensorKey, headerLabel, val, tgt, stale) {
+  const box = document.getElementById('box-'+sensorKey);
+  if (!box) return false;
+
+  // Only update value/status classes, never touch the label input
+  let boxCls='', valHTML='', subHTML='', badgeHTML='';
+  if (stale || val===null || val===undefined) {
+    valHTML='<div class="sensor-value na-val">--</div>'; subHTML='<div class="sensor-sub">&nbsp;</div>';
+  } else if (tgt===null || tgt===undefined) {
+    boxCls='blue'; valHTML=`<div class="sensor-value blue-val">${val.toFixed(2)} Pa</div>`; subHTML='<div class="sensor-sub">&nbsp;</div>';
+  } else {
+    const pass=val<=tgt;
+    boxCls=pass?'pass':'fail';
+    const vc=pass?'pass-val':'fail-val', bc=pass?'s-badge-pass':'s-badge-fail';
+    badgeHTML=`<span class="s-badge ${bc}">${pass?'PASS':'FAIL'}</span>`;
+    valHTML=`<div class="sensor-value ${vc}">${val.toFixed(2)} Pa</div>`;
+    subHTML=`<div class="sensor-sub">Target: ${tgt.toFixed(2)} Pa</div>`;
+  }
+  box.className='sensor-box'+(boxCls?' '+boxCls:'');
+  // Update s-top (header + badge), value, sub — but leave .slabel-wrap alone
+  const stop = box.querySelector('.s-top');
+  if (stop) stop.innerHTML=`<span class="sensor-label">${headerLabel}</span>${badgeHTML}`;
+  const sv = box.querySelector('.sensor-value');
+  if (sv) sv.outerHTML = valHTML;  // replace just value
+  // Re-query after outerHTML replacement
+  const svNew = box.querySelector('.sensor-value');
+  if (svNew) svNew.insertAdjacentHTML('afterend', subHTML);
+  const oldSub = box.querySelectorAll('.sensor-sub');
+  if (oldSub.length > 1) oldSub[0].remove(); // remove old sub if duplicate
+  return true;
 }
+
+let knownDevices = new Set();
+
 async function refresh() {
   try {
     const res=await fetch('/data'); const data=await res.json();
-    const sensors=data.sensors||{}, labels=data.labels||{};
+    const sensors=data.sensors||{}, serverLabels=data.labels||{};
+
+    // Populate job fields once
     if (data.job) {
       const cn=document.getElementById('client-name'), ad=document.getElementById('address');
       if (!cn.value) cn.value=data.job.client_name||'';
       if (!ad.value) ad.value=data.job.address||'';
     }
-    const names=Object.keys(sensors).sort(), grid=document.getElementById('grid');
-    if (!names.length) { grid.innerHTML='<div class="no-sensors">Waiting for sensors...</div>'; }
-    else {
-      grid.innerHTML=names.map(name=>{
-        const s=sensors[name], stale=s.age>30, label=labels[name]||s.label||'';
-        const badge=stale?'<span class="badge badge-offline">OFFLINE</span>':'';
-        return `<div class="card">
-          <div class="card-top"><span class="card-name">${name}</span>${badge}</div>
-          <div class="label-row">${buildLabelSelect(name,label)}</div>
-          <div class="sensors">
-            ${sensorBox('Sensor 1 — Inlet',s.s1,s.tgt1,stale)}
-            ${sensorBox('Sensor 2 — Outlet',s.s2,s.tgt2,stale)}
-          </div></div>`;
-      }).join('');
+
+    // Seed localLabels from server on first sight of each key
+    for (const [key, lbl] of Object.entries(serverLabels)) {
+      if (!(key in localLabels)) localLabels[key] = lbl;
     }
+
+    const names=Object.keys(sensors).sort();
+    const grid=document.getElementById('grid');
+
+    if (!names.length) {
+      grid.innerHTML='<div class="no-sensors">Waiting for sensors...</div>';
+      knownDevices.clear();
+    } else {
+      // Check if we need to add any new device cards
+      const newDevices = names.filter(n => !knownDevices.has(n));
+      const gone = [...knownDevices].filter(n => !sensors[n]);
+
+      // Remove cards for devices that disappeared
+      gone.forEach(n => {
+        const el=document.getElementById('card-'+n);
+        if (el) el.remove();
+        knownDevices.delete(n);
+      });
+
+      // Add cards for new devices
+      newDevices.forEach(name => {
+        const s=sensors[name], stale=s.age>30;
+        const s1key=name+'-S1', s2key=name+'-S2';
+        const s1lbl=(s1key in localLabels)?localLabels[s1key]:(serverLabels[s1key]||'');
+        const s2lbl=(s2key in localLabels)?localLabels[s2key]:(serverLabels[s2key]||'');
+        const badge=stale?'<span class="badge badge-offline">OFFLINE</span>':'';
+        const card=document.createElement('div');
+        card.className='card'; card.id='card-'+name;
+        card.innerHTML=`
+          <div class="card-top"><span class="card-name">${name}</span><span id="badge-${name}">${badge}</span></div>
+          <div class="sensors">
+            ${sensorBoxHTML(s1key,'Sensor 1 — Inlet', s.s1,s.tgt1,stale,s1lbl)}
+            ${sensorBoxHTML(s2key,'Sensor 2 — Outlet',s.s2,s.tgt2,stale,s2lbl)}
+          </div>`;
+        // Insert in sorted order
+        const sorted=names;
+        const idx=sorted.indexOf(name);
+        const cards=[...grid.children].filter(el=>el.classList.contains('card'));
+        if (idx>=cards.length) grid.appendChild(card);
+        else grid.insertBefore(card,cards[idx]);
+        knownDevices.add(name);
+      });
+
+      // Update existing cards (values only, never rebuild)
+      names.forEach(name => {
+        if (newDevices.includes(name)) return; // just built it
+        const s=sensors[name], stale=s.age>30;
+        const badge=stale?'<span class="badge badge-offline">OFFLINE</span>':'';
+        const badgeEl=document.getElementById('badge-'+name);
+        if (badgeEl) badgeEl.innerHTML=badge;
+        // Update sensor values in-place
+        const s1key=name+'-S1', s2key=name+'-S2';
+        updateSensorBox(s1key,'Sensor 1 — Inlet', s.s1,s.tgt1,stale);
+        updateSensorBox(s2key,'Sensor 2 — Outlet',s.s2,s.tgt2,stale);
+      });
+
+      // Remove no-sensors placeholder if present
+      const ns=grid.querySelector('.no-sensors');
+      if (ns) ns.remove();
+    }
+
     document.getElementById('sub').textContent=names.length+' device(s) online';
+
+    // Snapshot comparison table
     const bl=data.snapshot_baseline, wf=data.snapshot_with_fan;
     const wrap=document.getElementById('snap-wrap'), tbody=document.getElementById('snap-tbody');
     if (bl&&wf) {
@@ -764,18 +854,25 @@ async function refresh() {
       const devs=[...new Set([...Object.keys(bl),...Object.keys(wf)])].sort();
       tbody.innerHTML=devs.map(dev=>{
         const b=bl[dev]||{}, w=wf[dev]||{};
+        const s1key=dev+'-S1', s2key=dev+'-S2';
+        const lbl1=localLabels[s1key]||serverLabels[s1key]||'';
+        const lbl2=localLabels[s2key]||serverLabels[s2key]||'';
         function valCell(v) { return v!=null?`<td>${v.toFixed(2)} Pa</td>`:'<td class="na">--</td>'; }
         function deltaCell(bv,wv) {
           if (bv==null||wv==null) return '<td class="na">--</td>';
           const d=wv-bv;
           return `<td class="${d<=0?'delta-pass':'delta-fail'}">${d.toFixed(2)} Pa</td>`;
         }
-        const lbl=b.label||w.label||labels[dev]||'';
-        return `<tr><td class="col-left col-device">${dev}</td><td class="col-left col-label">${lbl}</td>
+        return `<tr>
+          <td class="col-left col-device">${dev}</td>
+          <td class="col-left col-label">${lbl1}</td>
           ${valCell(b.s1)}${valCell(w.s1)}${deltaCell(b.s1,w.s1)}
-          ${valCell(b.s2)}${valCell(w.s2)}${deltaCell(b.s2,w.s2)}</tr>`;
+          <td class="col-left col-label">${lbl2}</td>
+          ${valCell(b.s2)}${valCell(w.s2)}${deltaCell(b.s2,w.s2)}
+        </tr>`;
       }).join('');
     } else { wrap.classList.remove('visible'); }
+
     document.getElementById('footer').textContent='Updated: '+new Date().toLocaleTimeString();
   } catch(e) { document.getElementById('footer').textContent='Connection lost...'; }
 }
@@ -1008,3 +1105,4 @@ with SMBus(1) as bus:
         s2_str=f"{p2:.2f} Pa" if p2 is not None else "--"
         print(f"S1:{s1_str} S2:{s2_str} Stage:{boot_stage} Mode:{wifi_mode}")
         time.sleep(1)
+      
