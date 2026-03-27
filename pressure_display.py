@@ -26,7 +26,7 @@ from WhisPlay import WhisPlayBoard
 
 import config
 import data_store as ds
-from sensor import init_sensor, read_sdp
+from sensor import init_sensor, read_sdp, zero_sensors
 
 # Shorthand
 lock = ds.lock
@@ -626,7 +626,17 @@ def data_log_loop():
 # Screen
 # =============================================================
 
-def load_splash():
+def get_battery_pct():
+    """Read battery percentage from PiSugar 3 via I2C."""
+    try:
+        with SMBus(1) as bus:
+            val = bus.read_byte_data(0x57, 0x2a)
+            return max(0, min(100, val))
+    except Exception:
+        return None
+
+
+
     try:
         img = Image.open(config.SPLASH_PATH).convert('RGB')
         return image_to_pixels(img)
@@ -661,6 +671,13 @@ def make_screen(p1, p2, target, mode):
 
     draw.text((6,  4), config.DEVICE_NAME,           font=f_small, fill=(120, 120, 255))
     draw.text((160, 4), mode_labels.get(mode, "?"),  font=f_small, fill=mode_colors.get(mode, (160,160,160)))
+
+    # Battery top right
+    batt = get_battery_pct()
+    if batt is not None:
+        batt_color = (0, 200, 0) if batt > 30 else (255, 60, 60)
+        draw.text((200, 4), f"{batt}%", font=f_tiny, fill=batt_color)
+
     draw.line([(0, 24), (240, 24)], fill=(50, 50, 50), width=1)
 
     def draw_sensor(label, pressure, y_top):
@@ -718,7 +735,6 @@ def screen_thread(board, splash):
 
 if __name__ == '__main__':
     board  = WhisPlayBoard()
-    board.set_backlight(80)
     splash = load_splash()
     if splash:
         board.draw_image(0, 0, 240, 280, splash)
@@ -741,9 +757,17 @@ if __name__ == '__main__':
     # ── Sensor loop (always runs) ─────────────────────────────
     with SMBus(1) as bus:
         init_sensor(bus)
+        print("Zeroing sensors...")
+        offset1, offset2 = zero_sensors(bus, config.SDP_ADDR_1, config.SDP_ADDR_2)
         while True:
             p1, t1 = read_sdp(bus, config.SDP_ADDR_1)
             p2, t2 = read_sdp(bus, config.SDP_ADDR_2)
+
+            # Apply zero offsets
+            if p1 is not None:
+                p1 -= offset1
+            if p2 is not None:
+                p2 -= offset2
 
             with lock:
                 ds.current_pressure1 = p1
