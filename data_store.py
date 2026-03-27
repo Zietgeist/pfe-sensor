@@ -16,8 +16,6 @@ import os
 
 from config import TARGET_PRESSURE, REPO_DIR
 
-battery_pct = None
-
 # ── Thread lock — all shared state must be accessed inside 'with lock' ──
 lock = threading.Lock()
 
@@ -37,6 +35,9 @@ target_pressure = TARGET_PRESSURE
 # { "PFE-1": {"s1": -12.3, "s2": -11.9, "temp1": 20.1, "temp2": 20.3,
 #             "label": "Utility Room", "time": 123456789} }
 sensor_data = {}
+
+# ── Battery percentage from PiSugar 3 ────────────────────────────────────
+battery_pct = None
 
 # ── Job metadata ─────────────────────────────────────────────────────────
 job_info = {
