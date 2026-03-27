@@ -635,7 +635,7 @@ def get_battery_pct(bus):
         return None
 
 
-
+def load_splash():
     try:
         img = Image.open(config.SPLASH_PATH).convert('RGB')
         return image_to_pixels(img)
@@ -733,17 +733,6 @@ def screen_thread(board, splash):
 # Main
 # =============================================================
 
-batt_timer = 0
-while True:
-    p1, t1 = read_sdp(bus, config.SDP_ADDR_1)
-    p2, t2 = read_sdp(bus, config.SDP_ADDR_2)
-    
-    batt_timer += 1
-    if batt_timer >= 30:
-        batt_timer = 0
-        with lock:
-            ds.battery_pct = get_battery_pct(bus)
-
 if __name__ == '__main__':
     board  = WhisPlayBoard()
     splash = load_splash()
@@ -770,6 +759,7 @@ if __name__ == '__main__':
         init_sensor(bus)
         print("Zeroing sensors...")
         offset1, offset2 = zero_sensors(bus, config.SDP_ADDR_1, config.SDP_ADDR_2)
+        batt_timer = 0
         while True:
             p1, t1 = read_sdp(bus, config.SDP_ADDR_1)
             p2, t2 = read_sdp(bus, config.SDP_ADDR_2)
@@ -779,6 +769,13 @@ if __name__ == '__main__':
                 p1 -= offset1
             if p2 is not None:
                 p2 -= offset2
+
+            # Read battery every 30 seconds
+            batt_timer += 1
+            if batt_timer >= 30:
+                batt_timer = 0
+                with lock:
+                    ds.battery_pct = get_battery_pct(bus)
 
             with lock:
                 ds.current_pressure1 = p1
