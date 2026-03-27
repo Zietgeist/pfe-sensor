@@ -290,6 +290,22 @@ h1 {{ color: #e8edf5; text-align: center; margin-bottom: 4px; font-size: 1.5em; 
 /* Download bar */
 .dl-bar {{ max-width: 1100px; margin: 0 auto 20px; display: flex; gap: 10px; flex-wrap: wrap; }}
 
+/* Snapshot comparison table */
+.snap-table-wrap {{ max-width: 1100px; margin: 0 auto 24px; display: none; }}
+.snap-table-wrap.visible {{ display: block; }}
+.snap-table-title {{ color: #7a8aaa; font-size: 0.8em; letter-spacing: 1px; margin-bottom: 8px; }}
+.snap-table {{ width: 100%; border-collapse: collapse; font-size: 0.85em; }}
+.snap-table th {{ background: #0d1525; color: #5a7aaa; text-align: center; padding: 8px 10px;
+                  border: 1px solid #1e2e4a; letter-spacing: 1px; font-size: 0.75em; text-transform: uppercase; }}
+.snap-table th.col-device {{ text-align: left; }}
+.snap-table td {{ background: #0a0f1a; border: 1px solid #1a2535; padding: 8px 10px; text-align: center; color: #c8d8f8; }}
+.snap-table td.col-device {{ text-align: left; color: #7a9adf; font-weight: 700; }}
+.snap-table td.col-label  {{ text-align: left; color: #5a7aaa; font-size: 0.85em; }}
+.snap-table td.delta-pass {{ color: #00e874; font-weight: 700; }}
+.snap-table td.delta-fail {{ color: #ff6060; font-weight: 700; }}
+.snap-table td.na         {{ color: #2a3a5a; }}
+.snap-table tr:hover td   {{ background: #0d1830; }}
+
 /* Device cards */
 .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
          gap: 16px; max-width: 1100px; margin: 0 auto; }}
@@ -349,6 +365,26 @@ h1 {{ color: #e8edf5; text-align: center; margin-bottom: 4px; font-size: 1.5em; 
   <div class="dl-bar">
     <span class="snap-label">DATA LOG:</span>
     <a class="btn" href="/download/log.csv">&#8595; DOWNLOAD FULL LOG (CSV)</a>
+  </div>
+
+  <!-- Snapshot comparison table — hidden until both snapshots exist -->
+  <div class="snap-table-wrap" id="snap-table-wrap">
+    <div class="snap-table-title">SNAPSHOT COMPARISON</div>
+    <table class="snap-table" id="snap-table">
+      <thead>
+        <tr>
+          <th class="col-device">DEVICE</th>
+          <th class="col-label">LOCATION</th>
+          <th>BASELINE S1</th>
+          <th>SUCTION S1</th>
+          <th>DELTA S1</th>
+          <th>BASELINE S2</th>
+          <th>SUCTION S2</th>
+          <th>DELTA S2</th>
+        </tr>
+      </thead>
+      <tbody id="snap-tbody"></tbody>
+    </table>
   </div>
 
   <div class="grid" id="grid"><div class="no-sensors">Waiting for sensors...</div></div>
@@ -492,6 +528,39 @@ h1 {{ color: #e8edf5; text-align: center; margin-bottom: 4px; font-size: 1.5em; 
             </div>
           </div>`;
         }}).join('');
+
+        // ── Snapshot comparison table ─────────────────────
+        const bl   = data.snapshot_baseline;
+        const wf   = data.snapshot_with_fan;
+        const wrap  = document.getElementById('snap-table-wrap');
+        const tbody = document.getElementById('snap-tbody');
+
+        if (bl && wf) {{
+          wrap.classList.add('visible');
+          const allDevices = [...new Set([...Object.keys(bl), ...Object.keys(wf)])].sort();
+          tbody.innerHTML = allDevices.map(dev => {{
+            const b = bl[dev] || {{}};
+            const w = wf[dev] || {{}};
+            function deltaCell(bv, wv) {{
+              if (bv == null || wv == null) return `<td class="na">--</td>`;
+              const d   = wv - bv;
+              const cls = d <= 0 ? 'delta-pass' : 'delta-fail';
+              return `<td class="${{cls}}">${{d.toFixed(2)}} Pa</td>`;
+            }}
+            function valCell(v) {{
+              return v != null ? `<td>${{v.toFixed(2)}} Pa</td>` : `<td class="na">--</td>`;
+            }}
+            const lbl = b.label || w.label || labels[dev] || '';
+            return `<tr>
+              <td class="col-device">${{dev}}</td>
+              <td class="col-label">${{lbl}}</td>
+              ${{valCell(b.s1)}}${{valCell(w.s1)}}${{deltaCell(b.s1, w.s1)}}
+              ${{valCell(b.s2)}}${{valCell(w.s2)}}${{deltaCell(b.s2, w.s2)}}
+            </tr>`;
+          }}).join('');
+        }} else {{
+          wrap.classList.remove('visible');
+        }}
 
         document.getElementById('footer').textContent = 'Updated: ' + new Date().toLocaleTimeString();
       }} catch(e) {{
