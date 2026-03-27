@@ -626,14 +626,11 @@ def data_log_loop():
 # Screen
 # =============================================================
 
-def get_battery_pct():
+def get_battery_pct(bus):
+    """Read battery % from PiSugar 3 using the already-open I2C bus."""
     try:
-        result = subprocess.run(
-            ['pisugar-cli', 'get', 'battery'],
-            capture_output=True, text=True, timeout=2
-        )
-        val = result.stdout.strip()
-        return int(float(val))
+        val = bus.read_byte_data(0x57, 0x2a)
+        return max(0, min(100, val))
     except Exception:
         return None
 
@@ -675,7 +672,8 @@ def make_screen(p1, p2, target, mode):
     draw.text((160, 4), mode_labels.get(mode, "?"),  font=f_small, fill=mode_colors.get(mode, (160,160,160)))
 
     # Battery top right
-    batt = get_battery_pct()
+    with lock:
+        batt = ds.battery_pct
     if batt is not None:
         batt_color = (0, 200, 0) if batt > 30 else (255, 60, 60)
         draw.text((200, 4), f"{batt}%", font=f_tiny, fill=batt_color)
@@ -734,6 +732,17 @@ def screen_thread(board, splash):
 # =============================================================
 # Main
 # =============================================================
+
+batt_timer = 0
+while True:
+    p1, t1 = read_sdp(bus, config.SDP_ADDR_1)
+    p2, t2 = read_sdp(bus, config.SDP_ADDR_2)
+    
+    batt_timer += 1
+    if batt_timer >= 30:
+        batt_timer = 0
+        with lock:
+            ds.battery_pct = get_battery_pct(bus)
 
 if __name__ == '__main__':
     board  = WhisPlayBoard()
