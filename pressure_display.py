@@ -722,11 +722,6 @@ def screen_thread(board, splash):
         current = (round(p1, 1) if p1 else None,
                    round(p2, 1) if p2 else None,
                    tgt, mode)
-        if current != last:
-            screen_data = make_screen(p1, p2, tgt, mode)
-            board.draw_image(0, 0, 240, 280, screen_data)
-            last = current
-        time.sleep(1)
 
 
 # =============================================================
@@ -735,6 +730,7 @@ def screen_thread(board, splash):
 
 if __name__ == '__main__':
     board  = WhisPlayBoard()
+    board.set_backlight(80)
     splash = load_splash()
     if splash:
         board.draw_image(0, 0, 240, 280, splash)
