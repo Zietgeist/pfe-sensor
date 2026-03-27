@@ -16,6 +16,27 @@ def init_sensor(bus):
         pass
 
 
+def zero_sensors(bus, addr1, addr2, duration=0.5):
+    """
+    Sample both sensors for `duration` seconds, average the results,
+    and return (offset1, offset2) to subtract from future readings.
+    Call once at startup before the main loop.
+    """
+    samples1, samples2 = [], []
+    end = time.time() + duration
+    while time.time() < end:
+        p1, _ = read_sdp(bus, addr1)
+        p2, _ = read_sdp(bus, addr2)
+        if p1 is not None:
+            samples1.append(p1)
+        if p2 is not None:
+            samples2.append(p2)
+    offset1 = sum(samples1) / len(samples1) if samples1 else 0.0
+    offset2 = sum(samples2) / len(samples2) if samples2 else 0.0
+    print(f"Zero offsets — S1: {offset1:.3f} Pa  S2: {offset2:.3f} Pa")
+    return offset1, offset2
+
+
 def read_sdp(bus, address):
     """
     Read one SDP800 sensor at the given I2C address.
