@@ -16,6 +16,8 @@ import os
 
 from config import TARGET_PRESSURE, REPO_DIR
 
+battery_pct = None
+
 # ── Thread lock — all shared state must be accessed inside 'with lock' ──
 lock = threading.Lock()
 
