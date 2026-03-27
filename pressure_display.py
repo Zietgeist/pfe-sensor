@@ -627,11 +627,13 @@ def data_log_loop():
 # =============================================================
 
 def get_battery_pct():
-    """Read battery percentage from PiSugar 3 via I2C."""
     try:
-        with SMBus(1) as bus:
-            val = bus.read_byte_data(0x57, 0x2a)
-            return max(0, min(100, val))
+        result = subprocess.run(
+            ['pisugar-cli', 'get', 'battery'],
+            capture_output=True, text=True, timeout=2
+        )
+        val = result.stdout.strip()
+        return int(float(val))
     except Exception:
         return None
 
