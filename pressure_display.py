@@ -13,6 +13,11 @@ Boot sequence:
   4. Press to lock baseline → targets calculated automatically
   5. Running: short press = capture suction snapshot
               long hold   = re-enter setup
+
+Hardware auto-detection at boot:
+  No MUX → 2 sensors: S1 at 0x25, S2 at 0x26  (original wiring)
+  MUX at 0x70 → up to 4 sensors: all at 0x25 on channels 0-3
+  Any sensor slot that doesn't respond → None (shown as --)
 """
 
 import sys, os, time, random, threading, subprocess, socket, json, csv, io
@@ -28,8 +33,10 @@ from WhisPlay import WhisPlayBoard
 # Constants
 # =============================================================
 DEVICE_NAME   = os.uname().nodename
-SDP_ADDR_1    = 0x25
-SDP_ADDR_2    = 0x26
+SDP_ADDR_1    = 0x25   # S1: direct or MUX ch0
+SDP_ADDR_2    = 0x26   # S2: direct only (no MUX; all MUX sensors use 0x25)
+MUX_ADDR      = 0x70   # TCA9548A / PCA9548A
+MUX_CHANNELS  = [0, 1, 2, 3]
 HOME_SSID     = "PFE-home"
 HOME_PASSWORD = "pferadon1"
 SITE_SSID     = "PFE-NET"
@@ -99,12 +106,20 @@ def c_to_f(c):
 # =============================================================
 lock = threading.Lock()
 
+# Sensor readings — s1/s2 always exist; s3/s4 only populated when MUX present
 current_pressure1 = None
 current_temp1     = None
 current_pressure2 = None
 current_temp2     = None
+current_pressure3 = None   # MUX ch2 only
+current_pressure4 = None   # MUX ch3 only
 zero_offset1      = 0.0
 zero_offset2      = 0.0
+zero_offset3      = 0.0
+zero_offset4      = 0.0
+
+# Hardware config — set once at boot by detect_hardware()
+has_mux = False   # True = MUX found; False = direct 0x25/0x26 wiring
 
 # boot stages: zeroing | pick_temp | pick_zone | lock_baseline | running
 boot_stage       = "zeroing"
@@ -115,15 +130,18 @@ climate_zone     = DEFAULT_ZONE
 zone_clicks      = 0
 baseline1        = None
 baseline2        = None
+baseline3        = None
+baseline4        = None
 target1          = None
 target2          = None
+target3          = None
+target4          = None
 
 wifi_mode        = "searching"
 sensor_data      = {}
 active           = True
 current_battery  = None
 
-# Phase 1 additions
 job_info          = {"client_name":"","address":""}
 sensor_labels     = {}
 snapshot_baseline = None
@@ -237,20 +255,40 @@ def setup_wifi():
     wifi_mode="searching"; return "searching"
 
 # =============================================================
-# Sensor
+# Sensor — hardware detection + reading
 # =============================================================
-def init_sensor(bus):
+def detect_hardware(bus):
+    """
+    Check for MUX at 0x70. Called once at boot.
+    Returns True if MUX found, False if direct wiring.
+    """
     try:
-        bus.i2c_rdwr(i2c_msg.write(0x00,[0x06]))
+        bus.read_byte(MUX_ADDR)
+        print("MUX detected at 0x70 — 4-sensor mode (all 0x25 via channels 0-3)")
+        return True
+    except Exception:
+        print("No MUX — direct mode (S1=0x25, S2=0x26)")
+        return False
+
+def _select_mux_channel(bus, channel):
+    bus.write_byte(MUX_ADDR, 1 << channel)
+
+def _disable_mux(bus):
+    bus.write_byte(MUX_ADDR, 0)
+
+def _soft_reset(bus):
+    try:
+        bus.i2c_rdwr(i2c_msg.write(0x00, [0x06]))
         time.sleep(0.05)
     except Exception:
         pass
 
 def read_sdp_raw(bus, address):
+    """Read one SDP sensor at the given address. Returns (pressure_pa, temp_c) or (None, None)."""
     try:
-        bus.i2c_rdwr(i2c_msg.write(address,[0x36,0x2F]))
+        bus.i2c_rdwr(i2c_msg.write(address, [0x36, 0x2F]))
         time.sleep(0.05)
-        read = i2c_msg.read(address,9)
+        read = i2c_msg.read(address, 9)
         bus.i2c_rdwr(read)
         data  = list(read)
         raw_p = (data[0]<<8)|data[1]
@@ -258,29 +296,57 @@ def read_sdp_raw(bus, address):
         raw_t = (data[3]<<8)|data[4]
         if raw_t > 32767: raw_t -= 65536
         scale = (data[6]<<8)|data[7]
-        if scale == 0: return None,None
-        return raw_p/scale, raw_t/200.0
+        if scale == 0: return None, None
+        return raw_p / scale, raw_t / 200.0
     except Exception:
-        return None,None
+        return None, None
+
+def read_all_raw(bus, mux_present):
+    """
+    Read all sensors. Returns four (pressure, temp) tuples.
+    Slots with no sensor return (None, None).
+
+    No MUX:   S1=0x25, S2=0x26, S3=None, S4=None
+    MUX:      S1=ch0/0x25, S2=ch1/0x25, S3=ch2/0x25, S4=ch3/0x25
+    """
+    if mux_present:
+        results = []
+        for ch in MUX_CHANNELS:
+            _select_mux_channel(bus, ch)
+            time.sleep(0.01)
+            _soft_reset(bus)
+            results.append(read_sdp_raw(bus, SDP_ADDR_1))
+        _disable_mux(bus)
+        return results[0], results[1], results[2], results[3]
+    else:
+        _soft_reset(bus)
+        r1 = read_sdp_raw(bus, SDP_ADDR_1)
+        r2 = read_sdp_raw(bus, SDP_ADDR_2)
+        return r1, r2, (None, None), (None, None)
 
 # =============================================================
 # Boot sequence
 # =============================================================
-def do_zeroing(bus):
-    global zero_offset1, zero_offset2, boot_stage, temp_band_choice, outdoor_temp_f
+def do_zeroing(bus, mux_present):
+    global zero_offset1, zero_offset2, zero_offset3, zero_offset4
+    global boot_stage, temp_band_choice, outdoor_temp_f
     print("Zeroing sensors...")
-    s1,s2,st = [],[],[]
+
+    s1, s2, s3, s4, st = [], [], [], [], []
     for _ in range(ZERO_SAMPLES):
-        p1,t1 = read_sdp_raw(bus,SDP_ADDR_1)
-        p2,t2 = read_sdp_raw(bus,SDP_ADDR_2)
-        if p1 is not None: s1.append(p1)
-        if p2 is not None: s2.append(p2)
-        for t in [t1,t2]:
+        r1, r2, r3, r4 = read_all_raw(bus, mux_present)
+        for val, bucket in [(r1, s1), (r2, s2), (r3, s3), (r4, s4)]:
+            p, t = val
+            if p is not None: bucket.append(p)
             if t is not None: st.append(t)
         time.sleep(0.05)
+
     with lock:
         zero_offset1 = sum(s1)/len(s1) if s1 else 0.0
         zero_offset2 = sum(s2)/len(s2) if s2 else 0.0
+        zero_offset3 = sum(s3)/len(s3) if s3 else 0.0
+        zero_offset4 = sum(s4)/len(s4) if s4 else 0.0
+
     avg_c  = sum(st)/len(st) if st else None
     temp_f = c_to_f(avg_c) if avg_c is not None else 50.0
     resolved = temp_band_from_f(temp_f)
@@ -288,7 +354,8 @@ def do_zeroing(bus):
         temp_band_choice = resolved
         outdoor_temp_f   = temp_f
         boot_stage       = "pick_temp"
-    print(f"Zero — S1:{zero_offset1:.3f} S2:{zero_offset2:.3f} AutoTemp:{temp_f:.1f}°F → {resolved}")
+    print(f"Zero offsets — S1:{zero_offset1:.3f} S2:{zero_offset2:.3f} "
+          f"S3:{zero_offset3:.3f} S4:{zero_offset4:.3f}  AutoTemp:{temp_f:.1f}°F → {resolved}")
     _start_temp_default_timer()
 
 def _start_temp_default_timer():
@@ -325,10 +392,10 @@ def _temp_timeout():
     with lock:
         if boot_stage != "pick_temp": return
         clicks = temp_clicks
-        t1,t2  = current_temp1, current_temp2
-    band = TEMP_CLICK_BANDS.get(max(1,min(5,clicks)),"auto")
+        t1, t2 = current_temp1, current_temp2
+    band = TEMP_CLICK_BANDS.get(max(1,min(5,clicks)), "auto")
     if band == "auto":
-        temps  = [t for t in [t1,t2] if t is not None]
+        temps  = [t for t in [t1, t2] if t is not None]
         avg_c  = sum(temps)/len(temps) if temps else None
         temp_f = c_to_f(avg_c) if avg_c else 50.0
         resolved = temp_band_from_f(temp_f)
@@ -353,7 +420,8 @@ def _zone_timeout():
 
 def advance_boot_stage():
     global boot_stage, temp_clicks, zone_clicks, climate_zone
-    global baseline1, baseline2, target1, target2
+    global baseline1, baseline2, baseline3, baseline4
+    global target1, target2, target3, target4
     global _temp_click_timer, _zone_click_timer, snapshot_baseline, snapshot_with_fan
 
     with lock:
@@ -382,37 +450,50 @@ def advance_boot_stage():
         with lock:
             p1 = current_pressure1
             p2 = current_pressure2
+            p3 = current_pressure3
+            p4 = current_pressure4
             tf = outdoor_temp_f if outdoor_temp_f is not None else 50.0
             z  = climate_zone
             baseline1  = p1
             baseline2  = p2
-            target1    = lookup_target(z,tf,p1) if p1 is not None else None
-            target2    = lookup_target(z,tf,p2) if p2 is not None else None
+            baseline3  = p3
+            baseline4  = p4
+            target1    = lookup_target(z, tf, p1) if p1 is not None else None
+            target2    = lookup_target(z, tf, p2) if p2 is not None else None
+            target3    = lookup_target(z, tf, p3) if p3 is not None else None
+            target4    = lookup_target(z, tf, p4) if p4 is not None else None
             boot_stage = "running"
             snapshot_baseline = {DEVICE_NAME:{
-                "s1":p1,"s2":p2,"label":sensor_labels.get(DEVICE_NAME,""),"time":time.time()}}
-        print(f"Baseline locked — S1:{baseline1} → {target1}Pa  S2:{baseline2} → {target2}Pa")
+                "s1":p1,"s2":p2,"s3":p3,"s4":p4,
+                "label":sensor_labels.get(DEVICE_NAME,""),"time":time.time()}}
+        print(f"Baseline locked — "
+              f"S1:{baseline1}→{target1}Pa  S2:{baseline2}→{target2}Pa  "
+              f"S3:{baseline3}→{target3}Pa  S4:{baseline4}→{target4}Pa")
 
     elif stage == "running":
-        # Short press in running = capture suction
         with lock:
             snap = {}
-            for device,d in sensor_data.items():
+            for device, d in sensor_data.items():
                 snap[device] = {"s1":d.get("s1"),"s2":d.get("s2"),
-                                "label":sensor_labels.get(device,d.get("label","")),"time":d.get("time")}
+                                "s3":d.get("s3"),"s4":d.get("s4"),
+                                "label":sensor_labels.get(device, d.get("label","")),"time":d.get("time")}
             snapshot_with_fan = snap
         print("Suction snapshot captured")
 
 def re_enter_setup():
-    global boot_stage,temp_clicks,temp_band_choice,outdoor_temp_f
-    global zone_clicks,climate_zone,baseline1,baseline2,target1,target2
-    global snapshot_baseline,snapshot_with_fan,_temp_click_timer,_zone_click_timer
+    global boot_stage, temp_clicks, temp_band_choice, outdoor_temp_f
+    global zone_clicks, climate_zone
+    global baseline1, baseline2, baseline3, baseline4
+    global target1, target2, target3, target4
+    global snapshot_baseline, snapshot_with_fan, _temp_click_timer, _zone_click_timer
     if _temp_click_timer: _temp_click_timer.cancel()
     if _zone_click_timer: _zone_click_timer.cancel()
     with lock:
         boot_stage=      "pick_temp"; temp_clicks=0; temp_band_choice=None; outdoor_temp_f=None
-        zone_clicks=0;   climate_zone=DEFAULT_ZONE;  baseline1=None; baseline2=None
-        target1=None;    target2=None; snapshot_baseline=None; snapshot_with_fan=None
+        zone_clicks=0;   climate_zone=DEFAULT_ZONE
+        baseline1=None;  baseline2=None; baseline3=None; baseline4=None
+        target1=None;    target2=None;   target3=None;   target4=None
+        snapshot_baseline=None; snapshot_with_fan=None
     print("Setup restarted")
 
 # =============================================================
@@ -442,13 +523,14 @@ def button_up():
 def append_log_row(device, d):
     with lock:
         row = {"timestamp":time.strftime("%Y-%m-%d %H:%M:%S"),"device":device,
-               "label":sensor_labels.get(device,d.get("label","")),"s1_pa":"","s2_pa":"",
-               "tgt1_pa":"","tgt2_pa":"","temp1_c":""}
-        if d.get("s1")   is not None: row["s1_pa"]   = round(d["s1"],3)
-        if d.get("s2")   is not None: row["s2_pa"]   = round(d["s2"],3)
-        if d.get("tgt1") is not None: row["tgt1_pa"] = round(d["tgt1"],3)
-        if d.get("tgt2") is not None: row["tgt2_pa"] = round(d["tgt2"],3)
-        if d.get("temp1")is not None: row["temp1_c"] = round(d["temp1"],2)
+               "label":sensor_labels.get(device, d.get("label","")),
+               "s1_pa":"","s2_pa":"","s3_pa":"","s4_pa":"",
+               "tgt1_pa":"","tgt2_pa":"","tgt3_pa":"","tgt4_pa":"","temp1_c":""}
+        for k in ["s1","s2","s3","s4"]:
+            if d.get(k) is not None: row[f"{k}_pa"] = round(d[k], 3)
+        for k in ["tgt1","tgt2","tgt3","tgt4"]:
+            if d.get(k) is not None: row[f"{k}_pa"] = round(d[k], 3)
+        if d.get("temp1") is not None: row["temp1_c"] = round(d["temp1"], 2)
         data_log.append(row)
 
 def data_log_loop():
@@ -456,8 +538,8 @@ def data_log_loop():
         time.sleep(60)
         with lock:
             devices = dict(sensor_data)
-        for device,d in devices.items():
-            append_log_row(device,d)
+        for device, d in devices.items():
+            append_log_row(device, d)
         print(f"Log: {len(data_log)} rows")
 
 def get_log_csv():
@@ -478,17 +560,21 @@ def get_snapshot_csv():
     out = io.StringIO()
     out.write(f"# PFE Snapshot Report\n# Client: {client}\n# Address: {addr}\n# Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
     w = csv.writer(out)
-    w.writerow(["Device","Label","Baseline S1 (Pa)","Baseline S2 (Pa)",
-                "With Fan S1 (Pa)","With Fan S2 (Pa)","Change S1 (Pa)","Change S2 (Pa)"])
+    w.writerow(["Device","Label",
+                "Baseline S1","Baseline S2","Baseline S3","Baseline S4",
+                "With Fan S1","With Fan S2","With Fan S3","With Fan S4",
+                "Delta S1","Delta S2","Delta S3","Delta S4"])
     for dev in sorted(set(list(bl.keys())+list(wf.keys()))):
         b=bl.get(dev,{}); wb=wf.get(dev,{})
-        bs1,bs2=b.get("s1"),b.get("s2"); ws1,ws2=wb.get("s1"),wb.get("s2")
-        ds1=round(ws1-bs1,3) if ws1 is not None and bs1 is not None else ""
-        ds2=round(ws2-bs2,3) if ws2 is not None and bs2 is not None else ""
-        w.writerow([dev,b.get("label",""),
-                    round(bs1,3) if bs1 is not None else "",round(bs2,3) if bs2 is not None else "",
-                    round(ws1,3) if ws1 is not None else "",round(ws2,3) if ws2 is not None else "",
-                    ds1,ds2])
+        row=[dev, b.get("label","")]
+        for k in ["s1","s2","s3","s4"]:
+            v=b.get(k); row.append(round(v,3) if v is not None else "")
+        for k in ["s1","s2","s3","s4"]:
+            v=wb.get(k); row.append(round(v,3) if v is not None else "")
+        for k in ["s1","s2","s3","s4"]:
+            bv=b.get(k); wv=wb.get(k)
+            row.append(round(wv-bv,3) if wv is not None and bv is not None else "")
+        w.writerow(row)
     return out.getvalue()
 
 # =============================================================
@@ -508,14 +594,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif self.path in ('/','index.html'):
             self._send_html(build_dashboard_html())
         elif self.path == '/download/log.csv':
-            self._send_csv(get_log_csv(),"pfe_log.csv")
+            self._send_csv(get_log_csv(), "pfe_log.csv")
         elif self.path == '/download/snapshots.csv':
-            self._send_csv(get_snapshot_csv(),"pfe_snapshots.csv")
+            self._send_csv(get_snapshot_csv(), "pfe_snapshots.csv")
         else:
             self.send_response(404); self.end_headers()
 
     def do_POST(self):
-        length = int(self.headers.get('Content-Length',0))
+        length = int(self.headers.get('Content-Length', 0))
         body   = self.rfile.read(length)
         try: payload = json.loads(body)
         except Exception: self.send_response(400); self.end_headers(); return
@@ -525,7 +611,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if name:
                 with lock:
                     sensor_data[name]={'s1':payload.get('s1'),'s2':payload.get('s2'),
+                                       's3':payload.get('s3'),'s4':payload.get('s4'),
                                        'tgt1':payload.get('tgt1'),'tgt2':payload.get('tgt2'),
+                                       'tgt3':payload.get('tgt3'),'tgt4':payload.get('tgt4'),
                                        'temp1':payload.get('temp1'),'label':payload.get('label',''),
                                        'time':time.time()}
                     if payload.get('label'): sensor_labels[name]=payload['label']
@@ -549,6 +637,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             which=payload.get('which','baseline')
             with lock:
                 snap={device:{"s1":d.get("s1"),"s2":d.get("s2"),
+                              "s3":d.get("s3"),"s4":d.get("s4"),
                               "label":sensor_labels.get(device,d.get("label","")),"time":d.get("time")}
                       for device,d in sensor_data.items()}
                 if which=='baseline': snapshot_baseline=snap
@@ -622,7 +711,8 @@ h1 { text-align: center; margin-bottom: 4px; font-size: 1.5em; letter-spacing: 2
 .card-name { font-size:1em; font-weight:700; color:#c8d8f8; letter-spacing:1px; }
 .badge { font-size:0.7em; padding:3px 10px; border-radius:4px; font-weight:700; letter-spacing:1px; }
 .badge-offline { background:#1e2535; color:#a0b0cc; border:1px solid #3a4460; }
-.sensors { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.sensors-2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.sensors-4 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
 .sensor-box { background:#0d1525; border-radius:8px; padding:12px; text-align:center; border:1px solid #1e2e4a; }
 .sensor-box.pass { background:#0d1f17; border-color:#00c060; }
 .sensor-box.fail { background:#1f0d0d; border-color:#e03030; }
@@ -636,9 +726,9 @@ h1 { text-align: center; margin-bottom: 4px; font-size: 1.5em; letter-spacing: 2
 .s-badge-pass { background:#003d20; color:#00e874; border:1px solid #00c060; }
 .s-badge-fail { background:#3d0000; color:#ff6060; border:1px solid #e03030; }
 .sensor-value { font-size:1.8em; font-weight:700; }
+.sensors-4 .sensor-value { font-size:1.3em; }
 .pass-val { color:#00e874; } .fail-val { color:#ff6060; } .blue-val { color:#5090ff; } .na-val { color:#8899bb; }
 .sensor-sub { font-size:0.72em; margin-top:4px; color:#5a7aaa; }
-/* Per-sensor label input — always visible, stable, doesn't rebuild */
 .slabel-wrap { margin-top:6px; }
 .slabel-input { background:#0a0f1a; border:1px solid #1e2e4a; color:#a8c8ff;
                 font-family:'Courier New',monospace; font-size:0.75em; padding:3px 6px;
@@ -672,8 +762,11 @@ h1 { text-align: center; margin-bottom: 4px; font-size: 1.5em; letter-spacing: 2
     <table class="snap-table">
       <thead><tr>
         <th class="col-left">DEVICE</th>
-        <th class="col-left">S1 LABEL</th><th>BASELINE S1</th><th>SUCTION S1</th><th>DELTA S1</th>
-        <th class="col-left">S2 LABEL</th><th>BASELINE S2</th><th>SUCTION S2</th><th>DELTA S2</th>
+        <th class="col-left">LABEL</th>
+        <th>BASE S1</th><th>FAN S1</th><th>DELTA S1</th>
+        <th>BASE S2</th><th>FAN S2</th><th>DELTA S2</th>
+        <th>BASE S3</th><th>FAN S3</th><th>DELTA S3</th>
+        <th>BASE S4</th><th>FAN S4</th><th>DELTA S4</th>
       </tr></thead>
       <tbody id="snap-tbody"></tbody>
     </table>
@@ -681,8 +774,6 @@ h1 { text-align: center; margin-bottom: 4px; font-size: 1.5em; letter-spacing: 2
   <div class="grid" id="grid"><div class="no-sensors">Waiting for sensors...</div></div>
   <div id="footer"></div>
   <script>
-// Labels stored locally — keyed by "PFE-1-S1", "PFE-1-S2", etc.
-// Populated from server on first load, then maintained locally to avoid flicker.
 const localLabels = {};
 
 async function saveJob() {
@@ -696,7 +787,6 @@ async function takeSnapshot(which) {
     body:JSON.stringify({which})});
 }
 
-// Called when user finishes typing in a sensor label input (on blur or Enter)
 async function onLabelBlur(key, input) {
   const label = input.value.trim();
   localLabels[key] = label;
@@ -704,8 +794,18 @@ async function onLabelBlur(key, input) {
     body:JSON.stringify({device:key, label})});
 }
 
+const SENSOR_DEFS = [
+  {k:'s1', tk:'tgt1', label:'Sensor 1'},
+  {k:'s2', tk:'tgt2', label:'Sensor 2'},
+  {k:'s3', tk:'tgt3', label:'Sensor 3'},
+  {k:'s4', tk:'tgt4', label:'Sensor 4'},
+];
+
+function hasMuxSensors(s) {
+  return s.s3 !== null && s.s3 !== undefined || s.s4 !== null && s.s4 !== undefined;
+}
+
 function sensorBoxHTML(sensorKey, headerLabel, val, tgt, stale, currentLabel) {
-  // Value display
   let boxCls, valHTML, subHTML, badgeHTML='';
   if (stale || val===null || val===undefined) {
     boxCls=''; valHTML='<div class="sensor-value na-val">--</div>'; subHTML='<div class="sensor-sub">&nbsp;</div>';
@@ -719,7 +819,6 @@ function sensorBoxHTML(sensorKey, headerLabel, val, tgt, stale, currentLabel) {
     valHTML=`<div class="sensor-value ${vc}">${val.toFixed(2)} Pa</div>`;
     subHTML=`<div class="sensor-sub">Target: ${tgt.toFixed(2)} Pa</div>`;
   }
-  // Label input — use local value if we have it, else server value
   const lbl = (sensorKey in localLabels) ? localLabels[sensorKey] : (currentLabel||'');
   return `<div class="sensor-box ${boxCls}" id="box-${sensorKey}">
     <div class="s-top"><span class="sensor-label">${headerLabel}</span>${badgeHTML}</div>
@@ -736,8 +835,6 @@ function sensorBoxHTML(sensorKey, headerLabel, val, tgt, stale, currentLabel) {
 function updateSensorBox(sensorKey, headerLabel, val, tgt, stale) {
   const box = document.getElementById('box-'+sensorKey);
   if (!box) return false;
-
-  // Only update value/status classes, never touch the label input
   let boxCls='', valHTML='', subHTML='', badgeHTML='';
   if (stale || val===null || val===undefined) {
     valHTML='<div class="sensor-value na-val">--</div>'; subHTML='<div class="sensor-sub">&nbsp;</div>';
@@ -752,16 +849,14 @@ function updateSensorBox(sensorKey, headerLabel, val, tgt, stale) {
     subHTML=`<div class="sensor-sub">Target: ${tgt.toFixed(2)} Pa</div>`;
   }
   box.className='sensor-box'+(boxCls?' '+boxCls:'');
-  // Update s-top (header + badge), value, sub — but leave .slabel-wrap alone
   const stop = box.querySelector('.s-top');
   if (stop) stop.innerHTML=`<span class="sensor-label">${headerLabel}</span>${badgeHTML}`;
   const sv = box.querySelector('.sensor-value');
-  if (sv) sv.outerHTML = valHTML;  // replace just value
-  // Re-query after outerHTML replacement
+  if (sv) sv.outerHTML = valHTML;
   const svNew = box.querySelector('.sensor-value');
   if (svNew) svNew.insertAdjacentHTML('afterend', subHTML);
   const oldSub = box.querySelectorAll('.sensor-sub');
-  if (oldSub.length > 1) oldSub[0].remove(); // remove old sub if duplicate
+  if (oldSub.length > 1) oldSub[0].remove();
   return true;
 }
 
@@ -772,14 +867,12 @@ async function refresh() {
     const res=await fetch('/data'); const data=await res.json();
     const sensors=data.sensors||{}, serverLabels=data.labels||{};
 
-    // Populate job fields once
     if (data.job) {
       const cn=document.getElementById('client-name'), ad=document.getElementById('address');
       if (!cn.value) cn.value=data.job.client_name||'';
       if (!ad.value) ad.value=data.job.address||'';
     }
 
-    // Seed localLabels from server on first sight of each key
     for (const [key, lbl] of Object.entries(serverLabels)) {
       if (!(key in localLabels)) localLabels[key] = lbl;
     }
@@ -791,62 +884,53 @@ async function refresh() {
       grid.innerHTML='<div class="no-sensors">Waiting for sensors...</div>';
       knownDevices.clear();
     } else {
-      // Check if we need to add any new device cards
       const newDevices = names.filter(n => !knownDevices.has(n));
       const gone = [...knownDevices].filter(n => !sensors[n]);
+      gone.forEach(n => { const el=document.getElementById('card-'+n); if (el) el.remove(); knownDevices.delete(n); });
 
-      // Remove cards for devices that disappeared
-      gone.forEach(n => {
-        const el=document.getElementById('card-'+n);
-        if (el) el.remove();
-        knownDevices.delete(n);
-      });
-
-      // Add cards for new devices
       newDevices.forEach(name => {
         const s=sensors[name], stale=s.age>30;
-        const s1key=name+'-S1', s2key=name+'-S2';
-        const s1lbl=(s1key in localLabels)?localLabels[s1key]:(serverLabels[s1key]||'');
-        const s2lbl=(s2key in localLabels)?localLabels[s2key]:(serverLabels[s2key]||'');
+        const isFour = hasMuxSensors(s);
+        const gridCls = isFour ? 'sensors-4' : 'sensors-2';
         const badge=stale?'<span class="badge badge-offline">OFFLINE</span>':'';
+        const slotsToShow = isFour ? SENSOR_DEFS : SENSOR_DEFS.slice(0,2);
+        const boxesHTML = slotsToShow.map(def => {
+          const key=name+'-'+def.k.toUpperCase();
+          const lbl=(key in localLabels)?localLabels[key]:(serverLabels[key]||'');
+          return sensorBoxHTML(key, def.label, s[def.k], s[def.tk], stale, lbl);
+        }).join('');
         const card=document.createElement('div');
         card.className='card'; card.id='card-'+name;
         card.innerHTML=`
           <div class="card-top"><span class="card-name">${name}</span><span id="badge-${name}">${badge}</span></div>
-          <div class="sensors">
-            ${sensorBoxHTML(s1key,'Sensor 1 — Inlet', s.s1,s.tgt1,stale,s1lbl)}
-            ${sensorBoxHTML(s2key,'Sensor 2 — Outlet',s.s2,s.tgt2,stale,s2lbl)}
-          </div>`;
-        // Insert in sorted order
-        const sorted=names;
-        const idx=sorted.indexOf(name);
+          <div class="${gridCls}">${boxesHTML}</div>`;
+        const idx=names.indexOf(name);
         const cards=[...grid.children].filter(el=>el.classList.contains('card'));
         if (idx>=cards.length) grid.appendChild(card);
         else grid.insertBefore(card,cards[idx]);
         knownDevices.add(name);
       });
 
-      // Update existing cards (values only, never rebuild)
       names.forEach(name => {
-        if (newDevices.includes(name)) return; // just built it
+        if (newDevices.includes(name)) return;
         const s=sensors[name], stale=s.age>30;
         const badge=stale?'<span class="badge badge-offline">OFFLINE</span>':'';
         const badgeEl=document.getElementById('badge-'+name);
         if (badgeEl) badgeEl.innerHTML=badge;
-        // Update sensor values in-place
-        const s1key=name+'-S1', s2key=name+'-S2';
-        updateSensorBox(s1key,'Sensor 1 — Inlet', s.s1,s.tgt1,stale);
-        updateSensorBox(s2key,'Sensor 2 — Outlet',s.s2,s.tgt2,stale);
+        const isFour = hasMuxSensors(s);
+        const slotsToShow = isFour ? SENSOR_DEFS : SENSOR_DEFS.slice(0,2);
+        slotsToShow.forEach(def => {
+          const key=name+'-'+def.k.toUpperCase();
+          updateSensorBox(key, def.label, s[def.k], s[def.tk], stale);
+        });
       });
 
-      // Remove no-sensors placeholder if present
       const ns=grid.querySelector('.no-sensors');
       if (ns) ns.remove();
     }
 
     document.getElementById('sub').textContent=names.length+' device(s) online';
 
-    // Snapshot comparison table
     const bl=data.snapshot_baseline, wf=data.snapshot_with_fan;
     const wrap=document.getElementById('snap-wrap'), tbody=document.getElementById('snap-tbody');
     if (bl&&wf) {
@@ -854,9 +938,6 @@ async function refresh() {
       const devs=[...new Set([...Object.keys(bl),...Object.keys(wf)])].sort();
       tbody.innerHTML=devs.map(dev=>{
         const b=bl[dev]||{}, w=wf[dev]||{};
-        const s1key=dev+'-S1', s2key=dev+'-S2';
-        const lbl1=localLabels[s1key]||serverLabels[s1key]||'';
-        const lbl2=localLabels[s2key]||serverLabels[s2key]||'';
         function valCell(v) { return v!=null?`<td>${v.toFixed(2)} Pa</td>`:'<td class="na">--</td>'; }
         function deltaCell(bv,wv) {
           if (bv==null||wv==null) return '<td class="na">--</td>';
@@ -865,10 +946,11 @@ async function refresh() {
         }
         return `<tr>
           <td class="col-left col-device">${dev}</td>
-          <td class="col-left col-label">${lbl1}</td>
+          <td class="col-left col-label">${b.label||''}</td>
           ${valCell(b.s1)}${valCell(w.s1)}${deltaCell(b.s1,w.s1)}
-          <td class="col-left col-label">${lbl2}</td>
           ${valCell(b.s2)}${valCell(w.s2)}${deltaCell(b.s2,w.s2)}
+          ${valCell(b.s3)}${valCell(w.s3)}${deltaCell(b.s3,w.s3)}
+          ${valCell(b.s4)}${valCell(w.s4)}${deltaCell(b.s4,w.s4)}
         </tr>`;
       }).join('');
     } else { wrap.classList.remove('visible'); }
@@ -883,7 +965,7 @@ refresh(); setInterval(refresh,2000);
 
 def run_web_server():
     try:
-        server = HTTPServer(('0.0.0.0',WEB_PORT), DashboardHandler)
+        server = HTTPServer(('0.0.0.0', WEB_PORT), DashboardHandler)
         print(f"Web server on port {WEB_PORT}")
         server.serve_forever()
     except Exception as e:
@@ -897,12 +979,17 @@ def report_data_loop(host_ip):
     while True:
         try:
             with lock:
-                p1=current_pressure1; p2=current_pressure2; t1=current_temp1
-                tg1=target1; tg2=target2; lbl=sensor_labels.get(DEVICE_NAME,'')
-            payload=json.dumps({'name':DEVICE_NAME,'s1':p1,'s2':p2,'tgt1':tg1,
-                                 'tgt2':tg2,'temp1':t1,'label':lbl}).encode()
-            req=Request(url,data=payload,headers={'Content-Type':'application/json'})
-            urlopen(req,timeout=3)
+                p1=current_pressure1; p2=current_pressure2
+                p3=current_pressure3; p4=current_pressure4
+                t1=current_temp1
+                tg1=target1; tg2=target2; tg3=target3; tg4=target4
+                lbl=sensor_labels.get(DEVICE_NAME,'')
+            payload=json.dumps({'name':DEVICE_NAME,
+                                's1':p1,'s2':p2,'s3':p3,'s4':p4,
+                                'tgt1':tg1,'tgt2':tg2,'tgt3':tg3,'tgt4':tg4,
+                                'temp1':t1,'label':lbl}).encode()
+            req=Request(url, data=payload, headers={'Content-Type':'application/json'})
+            urlopen(req, timeout=3)
         except Exception as e:
             print(f"Report error: {e}")
         time.sleep(1)
@@ -921,7 +1008,7 @@ def image_to_pixels(img):
     pixels=[]
     for r,g,b in img.getdata():
         rgb565=((r&0xF8)<<8)|((g&0xFC)<<3)|(b>>3)
-        pixels.extend([(rgb565>>8)&0xFF,rgb565&0xFF])
+        pixels.extend([(rgb565>>8)&0xFF, rgb565&0xFF])
     return pixels
 
 def _font(size, bold=False):
@@ -988,7 +1075,7 @@ def make_screen_boot(stage, temp_c):
     draw_battery_bar(draw,batt)
     return image_to_pixels(img)
 
-def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
+def make_screen_running(p1, p2, p3, p4, t1, tgt1, tgt2, tgt3, tgt4, mode, mux_present):
     img=Image.new('RGB',(240,280),(0,0,0)); draw=ImageDraw.Draw(img)
     f_big=_font(38,True); f_med=_font(18,True); f_small=_font(14,False); f_tiny=_font(12,False)
     mode_colors={"home":(100,200,100),"host":(0,230,0),"client":(0,230,0),
@@ -999,24 +1086,48 @@ def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
     draw.text((160,4),mode_labels.get(mode,"?"),font=f_small,fill=mode_colors.get(mode,(160,160,160)))
     draw.line([(0,24),(240,24)],fill=(50,50,50),width=1)
 
-    def draw_sensor(label,pressure,target,y_top):
-        draw.text((6,y_top),label,font=f_tiny,fill=(150,150,150))
-        if pressure is None:
-            draw.text((6,y_top+16),"--",font=f_big,fill=(80,80,80))
-        elif target is None:
-            draw.text((6,y_top+16),f"{pressure:.2f}",font=f_big,fill=(80,160,255))
-            draw.text((148,y_top+16),"Pa",font=f_med,fill=(60,120,200))
-        else:
-            passed=pressure<=target; color=(0,230,0) if passed else (255,60,60)
-            draw.text((180,y_top+16),"PASS" if passed else "FAIL",font=f_med,fill=color)
-            draw.text((6,y_top+16),f"{pressure:.2f}",font=f_big,fill=color)
-            draw.text((148,y_top+16),"Pa",font=f_med,fill=color)
-            draw.text((6,y_top+65),f"Target: {target:.2f} Pa",font=f_small,fill=(180,180,180))
-        draw.line([(0,y_top+85),(240,y_top+85)],fill=(40,40,40),width=1)
+    if not mux_present:
+        # Original 2-sensor layout (big numbers)
+        def draw_sensor(label, pressure, target, y_top):
+            draw.text((6,y_top),label,font=f_tiny,fill=(150,150,150))
+            if pressure is None:
+                draw.text((6,y_top+16),"--",font=f_big,fill=(80,80,80))
+            elif target is None:
+                draw.text((6,y_top+16),f"{pressure:.2f}",font=f_big,fill=(80,160,255))
+                draw.text((148,y_top+16),"Pa",font=f_med,fill=(60,120,200))
+            else:
+                passed=pressure<=target; color=(0,230,0) if passed else (255,60,60)
+                draw.text((180,y_top+16),"PASS" if passed else "FAIL",font=f_med,fill=color)
+                draw.text((6,y_top+16),f"{pressure:.2f}",font=f_big,fill=color)
+                draw.text((148,y_top+16),"Pa",font=f_med,fill=color)
+                draw.text((6,y_top+65),f"Target: {target:.2f} Pa",font=f_small,fill=(180,180,180))
+            draw.line([(0,y_top+85),(240,y_top+85)],fill=(40,40,40),width=1)
 
-    draw_sensor("SENSOR 1",p1,tgt1,28)
-    draw_sensor("SENSOR 2",p2,tgt2,118)
+        draw_sensor("SENSOR 1", p1, tgt1, 28)
+        draw_sensor("SENSOR 2", p2, tgt2, 118)
 
+    else:
+        # Compact 2x2 layout for 4 sensors
+        f_cmed=_font(16,True); f_ctiny=_font(11,False)
+        cells=[(p1,tgt1,"S1",0,28),(p2,tgt2,"S2",120,28),
+               (p3,tgt3,"S3",0,148),(p4,tgt4,"S4",120,148)]
+        for p,tgt,label,x,y in cells:
+            draw.text((x+4,y),label,font=f_ctiny,fill=(150,150,150))
+            if p is None:
+                draw.text((x+4,y+14),"--",font=f_cmed,fill=(80,80,80))
+            elif tgt is None:
+                draw.text((x+4,y+14),f"{p:.2f}",font=f_cmed,fill=(80,160,255))
+                draw.text((x+4,y+36),"Pa",font=f_ctiny,fill=(60,120,200))
+            else:
+                passed=p<=tgt; color=(0,230,0) if passed else (255,60,60)
+                draw.text((x+4,y+14),f"{p:.2f}",font=f_cmed,fill=color)
+                draw.text((x+4,y+36),"Pa",font=f_ctiny,fill=color)
+                draw.text((x+4,y+52),"PASS" if passed else "FAIL",font=f_ctiny,fill=color)
+            if x==0:
+                draw.line([(120,y-2),(120,y+110)],fill=(50,50,50),width=1)
+            draw.line([(0,y+112),(240,y+112)],fill=(40,40,40),width=1)
+
+    # Footer
     with lock: tbc=temp_band_choice; z=climate_zone
     draw.text((6,215),TEMP_BAND_LABELS.get(tbc,"Temp not set"),font=f_tiny,fill=(100,100,200))
     draw.text((6,230),z.upper(),font=f_tiny,fill=(100,100,200))
@@ -1032,18 +1143,25 @@ def make_screen_running(p1, p2, t1, tgt1, tgt2, mode):
     draw_battery_bar(draw,batt)
     return image_to_pixels(img)
 
-def screen_thread(board):
+def screen_thread(board, mux_present):
     last=None
     while True:
         with lock:
-            p1=current_pressure1; p2=current_pressure2; t1=current_temp1
-            tg1=target1; tg2=target2; mode=wifi_mode; stage=boot_stage
+            p1=current_pressure1; p2=current_pressure2
+            p3=current_pressure3; p4=current_pressure4
+            t1=current_temp1
+            tg1=target1; tg2=target2; tg3=target3; tg4=target4
+            mode=wifi_mode; stage=boot_stage
             tc=temp_clicks; zc=zone_clicks; tbc=temp_band_choice; z=climate_zone
-        current=(stage,round(p1,2) if p1 is not None else None,
-                 round(p2,2) if p2 is not None else None,tg1,tg2,mode,tc,zc,tbc,z)
+        current=(stage,
+                 round(p1,2) if p1 is not None else None,
+                 round(p2,2) if p2 is not None else None,
+                 round(p3,2) if p3 is not None else None,
+                 round(p4,2) if p4 is not None else None,
+                 tg1,tg2,tg3,tg4,mode,tc,zc,tbc,z)
         if current!=last:
             if stage=="running":
-                screen_data=make_screen_running(p1,p2,t1,tg1,tg2,mode)
+                screen_data=make_screen_running(p1,p2,p3,p4,t1,tg1,tg2,tg3,tg4,mode,mux_present)
             else:
                 screen_data=make_screen_boot(stage,t1)
             board.draw_image(0,0,240,280,screen_data)
@@ -1064,9 +1182,6 @@ if splash:
     board.draw_image(0,0,240,280,splash)
     time.sleep(2)
 
-threading.Thread(target=screen_thread,    args=(board,), daemon=True).start()
-threading.Thread(target=battery_poll_loop, daemon=True).start()
-
 def wifi_and_serve():
     mode = setup_wifi()
     print(f"WiFi mode: {mode}")
@@ -1074,35 +1189,60 @@ def wifi_and_serve():
         threading.Thread(target=data_log_loop, daemon=True).start()
         run_web_server()
 
+threading.Thread(target=battery_poll_loop, daemon=True).start()
 threading.Thread(target=wifi_and_serve, daemon=True).start()
 
 with SMBus(1) as bus:
-    init_sensor(bus)
-    do_zeroing(bus)
+    # ── Detect hardware once at boot ──────────────────────────
+    mux_found = detect_hardware(bus)
+    with lock:
+        has_mux = mux_found
 
+    # Screen starts after hardware is known (needs mux_found to pick layout)
+    threading.Thread(target=screen_thread, args=(board, mux_found), daemon=True).start()
+
+    # ── Zero all present sensors ──────────────────────────────
+    do_zeroing(bus, mux_found)
+
+    # ── Main loop ─────────────────────────────────────────────
     while True:
-        p1_raw,t1 = read_sdp_raw(bus,SDP_ADDR_1)
-        p2_raw,t2 = read_sdp_raw(bus,SDP_ADDR_2)
-        p1 = (p1_raw - zero_offset1) if p1_raw is not None else None
-        p2 = (p2_raw - zero_offset2) if p2_raw is not None else None
+        r1, r2, r3, r4 = read_all_raw(bus, mux_found)
+
+        p1_raw, t1 = r1
+        p2_raw, t2 = r2
+        p3_raw, t3 = r3
+        p4_raw, t4 = r4
+
+        with lock:
+            zo1=zero_offset1; zo2=zero_offset2; zo3=zero_offset3; zo4=zero_offset4
+
+        p1 = (p1_raw - zo1) if p1_raw is not None else None
+        p2 = (p2_raw - zo2) if p2_raw is not None else None
+        p3 = (p3_raw - zo3) if p3_raw is not None else None
+        p4 = (p4_raw - zo4) if p4_raw is not None else None
 
         with lock:
             current_pressure1=p1; current_temp1=t1
             current_pressure2=p2; current_temp2=t2
-            mode=wifi_mode; tg1=target1; tg2=target2
+            current_pressure3=p3
+            current_pressure4=p4
+            mode=wifi_mode; tg1=target1; tg2=target2; tg3=target3; tg4=target4
 
-        if mode=="host":
+        if mode == "host":
             with lock:
-                sensor_data[DEVICE_NAME]={'s1':p1,'s2':p2,'tgt1':tg1,'tgt2':tg2,
+                sensor_data[DEVICE_NAME]={'s1':p1,'s2':p2,'s3':p3,'s4':p4,
+                                           'tgt1':tg1,'tgt2':tg2,'tgt3':tg3,'tgt4':tg4,
                                            'temp1':t1,'label':sensor_labels.get(DEVICE_NAME,''),
                                            'time':time.time()}
 
-        if mode=="client":
-            threading.Thread(target=report_data_loop,args=(HOST_IP,),daemon=True).start()
+        if mode == "client":
+            threading.Thread(target=report_data_loop, args=(HOST_IP,), daemon=True).start()
             with lock: wifi_mode="client_reporting"
 
-        s1_str=f"{p1:.2f} Pa" if p1 is not None else "--"
-        s2_str=f"{p2:.2f} Pa" if p2 is not None else "--"
-        print(f"S1:{s1_str} S2:{s2_str} Stage:{boot_stage} Mode:{wifi_mode}")
+        parts = [f"S1:{f'{p1:.2f}Pa' if p1 is not None else '--'}",
+                 f"S2:{f'{p2:.2f}Pa' if p2 is not None else '--'}"]
+        if mux_found:
+            parts += [f"S3:{f'{p3:.2f}Pa' if p3 is not None else '--'}",
+                      f"S4:{f'{p4:.2f}Pa' if p4 is not None else '--'}"]
+        print("  ".join(parts) + f"  Stage:{boot_stage}  Mode:{wifi_mode}")
         time.sleep(1)
-      
