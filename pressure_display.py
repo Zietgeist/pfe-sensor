@@ -212,8 +212,8 @@ def connect_to(ssid, password):
 def create_hotspot():
     try:
         subprocess.run(['sudo','nmcli','dev','wifi','hotspot','ifname','wlan0',
-                        'ssid',SITE_SSID,'password',SITE_PASSWORD],
-                       check=True, timeout=30)
+		                'ssid',SITE_SSID,'password',SITE_PASSWORD,'band','bg'],
+		               check=True, timeout=30)
         time.sleep(3)
         print(f"Hotspot up: {SITE_SSID}")
         return True
