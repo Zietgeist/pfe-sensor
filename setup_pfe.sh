@@ -1,5 +1,5 @@
 #!/bin/bash
-# PFE Sensor Setup Script — Revised
+# PFE Sensor Setup Script — Revised (auto-numbering)
 # Run on a fresh Raspberry Pi OS Bookworm Lite install
 # Username: pi
 #
@@ -8,26 +8,82 @@
 #
 # Don't abort on error — let it log and continue
 set +e
-# --- Ask for device number ---
-read -p "Enter device number (e.g. 1 for PFE-1): " DEVICE_NUM
-DEVICE_NAME="PFE-$DEVICE_NUM"
+
+REPO_DIR="/home/pi/pfe-sensor"
+NUMBER_FILE="next_device_number.txt"
+
 # --- Ask for GitHub PAT ---
-read -p "Enter GitHub PAT (for auto-updates): " GITHUB_PAT
+read -p "Enter GitHub PAT (for auto-updates and numbering): " GITHUB_PAT
 echo ""
-echo "Setting up $DEVICE_NAME..."
+
+# --- Set up git identity (needed to commit) ---
+git config --global user.email "pfe-device@local"
+git config --global user.name "PFE Device"
+git config --global credential.helper store
+echo "https://Zietgeist:${GITHUB_PAT}@github.com" | sudo tee /root/.git-credentials > /dev/null
+echo "https://Zietgeist:${GITHUB_PAT}@github.com" > /home/pi/.git-credentials
+git config --global --add safe.directory "$REPO_DIR"
+
+# --- Clone the repo now (early) so we can claim a device number ---
+echo "Cloning PFE repo to claim a device number..."
+if [ ! -d "$REPO_DIR" ]; then
+  git clone "https://Zietgeist:${GITHUB_PAT}@github.com/Zietgeist/pfe-sensor.git" "$REPO_DIR"
+fi
+sudo chown -R pi:pi "$REPO_DIR"
+
+# --- Claim the next device number ---
+echo "Claiming a device number..."
+cd "$REPO_DIR"
+DEVICE_NUM=""
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    git fetch origin main > /dev/null 2>&1
+    git reset --hard origin/main > /dev/null 2>&1
+
+    if [ ! -f "$NUMBER_FILE" ]; then
+        echo "6" > "$NUMBER_FILE"   # fallback starting point if file is missing
+    fi
+
+    CANDIDATE=$(cat "$NUMBER_FILE" | tr -d '[:space:]')
+    NEXT=$((CANDIDATE + 1))
+    echo "$NEXT" > "$NUMBER_FILE"
+
+    git add "$NUMBER_FILE"
+    git commit -m "Claim device number $CANDIDATE" > /dev/null 2>&1
+    if git push origin main > /dev/null 2>&1; then
+        DEVICE_NUM=$CANDIDATE
+        echo "Claimed device number: $DEVICE_NUM"
+        break
+    else
+        echo "Number was taken by another device booting at the same time — retrying..."
+        sleep $((RANDOM % 5 + 1))
+    fi
+done
+
+if [ -z "$DEVICE_NUM" ]; then
+    echo "Could not claim a device number after 10 tries. Check your internet connection and re-run this script."
+    exit 1
+fi
+
+DEVICE_NAME="PFE-$DEVICE_NUM"
 echo ""
+echo "This device will be named: $DEVICE_NAME"
+echo ""
+
 # --- Set hostname ---
 echo "[1/9] Setting hostname to $DEVICE_NAME..."
 sudo hostnamectl set-hostname "$DEVICE_NAME" || echo "hostnamectl failed, using fallback..."
 echo "$DEVICE_NAME" | sudo tee /etc/hostname > /dev/null
 sudo sed -i "s/127\.0\.1\.1.*/127.0.1.1\t$DEVICE_NAME/" /etc/hosts
 echo "Hostname set to $DEVICE_NAME."
+
 # --- Update package list only (no full upgrade) ---
 echo "[2/9] Updating package list..."
 sudo apt update
+
 # --- Install dependencies ---
 echo "[3/9] Installing dependencies..."
 sudo apt install -y git python3-pip python3-pil python3-smbus2 network-manager bluetooth bluez
+
 # --- Install BLE election packages (for host self-organizing) ---
 echo "[4/9] Installing Bluetooth packages for device election..."
 sudo apt install -y libcairo2-dev libgirepository1.0-dev pkg-config python3-dev python3-dbus
@@ -36,6 +92,7 @@ sudo rfkill unblock bluetooth
 sudo systemctl enable bluetooth
 sudo systemctl start bluetooth
 echo "Bluetooth packages installed and service running."
+
 # --- Install Whisplay driver ---
 echo "[5/9] Installing Whisplay HAT driver..."
 cd /home/pi
@@ -43,26 +100,26 @@ git clone https://github.com/PiSugar/Whisplay.git --depth 1
 cd /home/pi/Whisplay/Driver
 echo "y" | sudo bash install_wm8960_drive.sh
 echo "Whisplay install done. Continuing (reboot comes at the end)..."
+
 # --- Enable I2C and SPI ---
 echo "[6/9] Enabling I2C and SPI..."
 sudo raspi-config nonint do_i2c 0
 sudo raspi-config nonint do_spi 0
 echo "I2C and SPI enabled."
-# --- Clone PFE repo ---
-echo "[7/9] Cloning PFE repo..."
-REPO_DIR="/home/pi/pfe-sensor"
-sudo git config --global credential.helper store
-echo "https://Zietgeist:${GITHUB_PAT}@github.com" | sudo tee /root/.git-credentials > /dev/null
-if [ ! -d "$REPO_DIR" ]; then
-  sudo git clone "https://Zietgeist:${GITHUB_PAT}@github.com/Zietgeist/pfe-sensor.git" "$REPO_DIR"
-fi
+
+# --- Repo already cloned above — just make sure it's current ---
+echo "[7/9] Confirming PFE repo is up to date..."
+cd "$REPO_DIR"
+git fetch origin main > /dev/null 2>&1
+git reset --hard origin/main > /dev/null 2>&1
 sudo chown -R pi:pi "$REPO_DIR"
-sudo git config --global --add safe.directory "$REPO_DIR"
+
 # --- Clear stale nmcli connections ---
 echo "[8/9] Clearing stale WiFi connections..."
 sudo nmcli connection delete PFE-NET 2>/dev/null || true
 sudo nmcli connection delete PFE-home 2>/dev/null || true
 echo "Stale connections cleared."
+
 # --- Install systemd service ---
 echo "[9/9] Installing autostart service..."
 sudo tee /etc/systemd/system/pfe-sensor.service > /dev/null <<EOF
@@ -82,6 +139,7 @@ WantedBy=multi-user.target
 EOF
 sudo systemctl daemon-reload
 sudo systemctl enable pfe-sensor.service
+
 echo ""
 echo "================================================"
 echo " $DEVICE_NAME setup complete!"
