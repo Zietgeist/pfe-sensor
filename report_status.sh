@@ -26,6 +26,12 @@ HAS_MUX="no"; echo "$I2C_SCAN" | grep -q " 70 " && HAS_MUX="yes"
 BT_STATUS="no"
 systemctl is-active --quiet bluetooth && BT_STATUS="yes"
 
+SD_CARD_SIZE=$(df -h / | awk 'NR==2{print $2}')
+DISK_USED_PERCENT=$(df -h / | awk 'NR==2{print $5}')
+IP_ADDRESS=$(hostname -I | awk '{print $1}')
+CODE_VERSION=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+CPU_TEMP=$(vcgencmd measure_temp 2>/dev/null | grep -o '[0-9.]*' || echo "unknown")
+
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # --- Save it into the shared registry, retry if another device is mid-save ---
@@ -38,9 +44,10 @@ for attempt in 1 2 3 4 5; do
     fi
 
     python3 - "$REGISTRY_FILE" "$DEVICE_NAME" "$RPI_MODEL" "$HAS_SCREEN" "$HAS_BATTERY" \
-        "$HAS_S1" "$HAS_S2" "$HAS_MUX" "$BT_STATUS" "$TIMESTAMP" <<'PYEOF'
+        "$HAS_S1" "$HAS_S2" "$HAS_MUX" "$BT_STATUS" "$SD_CARD_SIZE" "$DISK_USED_PERCENT" \
+        "$IP_ADDRESS" "$CODE_VERSION" "$CPU_TEMP" "$TIMESTAMP" <<'PYEOF'
 import json, sys
-path, name, model, screen, batt, s1, s2, mux, bt, ts = sys.argv[1:]
+path, name, model, screen, batt, s1, s2, mux, bt, sd_size, disk_used, ip, code_ver, temp, ts = sys.argv[1:]
 try:
     with open(path) as f:
         data = json.load(f)
@@ -54,6 +61,11 @@ data[name] = {
     "sensor_2": s2,
     "mux_present": mux,
     "bluetooth": bt,
+    "sd_card_size": sd_size,
+    "disk_used_percent": disk_used,
+    "ip_address": ip,
+    "code_version": code_ver,
+    "cpu_temp_c": temp,
     "last_seen": ts,
 }
 with open(path, "w") as f:
