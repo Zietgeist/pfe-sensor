@@ -177,13 +177,13 @@ def battery_poll_loop():
 def draw_battery_bar(draw, batt):
     if batt is None: return
     batt = max(0.0, min(100.0, batt))
-    bx, by, bw, bh = 208, 5, 26, 14
+    bx, by, bw, bh = 226, 28, 10, 180   # x, y, width, height of the tall bar
     draw.rectangle([bx, by, bx+bw, by+bh], outline=(100,100,100))
-    draw.rectangle([bx+bw, by+4, bx+bw+3, by+bh-4], fill=(100,100,100))
-    fill_w = int((bw-2) * batt / 100)
+    fill_h = int((bh-2) * batt / 100)
     color  = (0,200,80) if batt > 50 else (220,180,0) if batt > 20 else (220,50,50)
-    if fill_w > 0:
-        draw.rectangle([bx+1, by+1, bx+1+fill_w, by+bh-1], fill=color)
+    if fill_h > 0:
+        # Fill from the BOTTOM up, like a real battery gauge
+        draw.rectangle([bx+1, by+bh-1-fill_h, bx+bw-1, by+bh-1], fill=color)
 
 # =============================================================
 # WiFi
