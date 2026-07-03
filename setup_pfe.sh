@@ -30,7 +30,7 @@ echo "[3/9] Installing dependencies..."
 sudo apt install -y git python3-pip python3-pil python3-smbus2 network-manager bluetooth bluez
 # --- Install BLE election packages (for host self-organizing) ---
 echo "[4/9] Installing Bluetooth packages for device election..."
-sudo apt install -y libcairo2-dev libgirepository1.0-dev pkg-config python3-dev
+sudo apt install -y libcairo2-dev libgirepository1.0-dev pkg-config python3-dev python3-dbus
 sudo pip3 install --break-system-packages bleak bluezero
 sudo rfkill unblock bluetooth
 sudo systemctl enable bluetooth
