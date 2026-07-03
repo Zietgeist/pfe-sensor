@@ -241,6 +241,8 @@ def already_connected_to():
         pass
     return None
 
+from ble_election import elect_host
+
 def setup_wifi():
     global wifi_mode
     cur = already_connected_to()
@@ -248,10 +250,20 @@ def setup_wifi():
     if cur == SITE_SSID:  wifi_mode="client"; return "client"
     if scan_for(HOME_SSID):
         if connect_to(HOME_SSID, HOME_PASSWORD): wifi_mode="home"; return "home"
-    time.sleep(random.uniform(1,5))
-    if scan_for(SITE_SSID):
-        if connect_to(SITE_SSID, SITE_PASSWORD): wifi_mode="client"; return "client"
-    if create_hotspot(): wifi_mode="host"; return "host"
+
+    # No home wifi found — we're in the field. Let BLE decide who hosts.
+    am_i_host, host_name = elect_host(DEVICE_NAME)
+
+    if am_i_host:
+        if create_hotspot(): wifi_mode="host"; return "host"
+    else:
+        # Give the host a few seconds to stand up its hotspot, then connect
+        for _ in range(10):
+            if scan_for(SITE_SSID, retries=1):
+                if connect_to(SITE_SSID, SITE_PASSWORD):
+                    wifi_mode="client"; return "client"
+            time.sleep(2)
+
     wifi_mode="searching"; return "searching"
 
 # =============================================================
