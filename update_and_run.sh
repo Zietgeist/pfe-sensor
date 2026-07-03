@@ -26,4 +26,6 @@ git fetch origin main >> "$LOG" 2>&1 || echo "Fetch failed, continuing" >> "$LOG
 git pull origin main >> "$LOG" 2>&1 || echo "Pull failed, continuing" >> "$LOG"
 echo "Code updated." >> "$LOG"
 
+bash "$REPO_DIR/report_status.sh" >> "$LOG" 2>&1
+
 exec python3 "$MAIN_SCRIPT" >> "$LOG" 2>&1
