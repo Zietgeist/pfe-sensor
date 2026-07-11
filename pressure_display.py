@@ -229,7 +229,26 @@ def connect_to(ssid, password):
         # seen it. Rescanning right here guarantees the cache is current.
         subprocess.run(['sudo','nmcli','dev','wifi','list','--rescan','yes'],
                        capture_output=True, text=True, timeout=20)
-        subprocess.run(['sudo','nmcli','dev','wifi','connect',ssid,'password',password],
+        # Build the connection profile manually instead of the one-shot
+        # "nmcli dev wifi connect" — that command lets NetworkManager pick
+        # its own defaults, which offer THREE key-management modes at once
+        # (WPA-PSK, WPA-PSK-SHA256, and FT-PSK/fast-roaming). Confirmed via
+        # journalctl that on the older Zero W v1's wifi chip (BCM43143 /
+        # brcmfmac), offering FT-PSK to an AP that doesn't support 802.11r
+        # fast transition makes the association handshake repeatedly time
+        # out ("scanning -> associating -> disconnected" looping for ~25s)
+        # even with a correct password and strong signal — NetworkManager
+        # then misreports it as a secrets problem once it gives up. Zero 2 W
+        # units don't seem to hit this. Forcing plain wpa-psk sidesteps the
+        # bad negotiation entirely.
+        conn_name = f"site-{ssid}"
+        subprocess.run(['sudo','nmcli','connection','delete',conn_name],
+                       capture_output=True, text=True, timeout=10)
+        subprocess.run(['sudo','nmcli','connection','add','type','wifi','ifname','wlan0',
+                       'con-name',conn_name,'ssid',ssid,
+                       'wifi-sec.key-mgmt','wpa-psk','wifi-sec.psk',password],
+                       check=True, timeout=30)
+        subprocess.run(['sudo','nmcli','connection','up',conn_name],
                        check=True, timeout=30)
         time.sleep(3)
         print(f"Connected to {ssid}")
