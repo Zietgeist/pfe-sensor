@@ -1,13 +1,13 @@
 {
   "PFE-1": {
     "bluetooth": "yes",
-    "code_version": "94a1d2d",
-    "cpu_temp_c": "50.5",
+    "code_version": "1e8ba92",
+    "cpu_temp_c": "49.4",
     "disk_used_percent": "6%",
     "has_battery": "yes",
     "has_screen": "yes",
-    "ip_address": "192.168.0.29",
-    "last_seen": "2026-07-11T18:16:51Z",
+    "ip_address": "2601:282:1c01:1360::e",
+    "last_seen": "2026-07-11T19:07:13Z",
     "mux_present": "no",
     "rpi_model": "Raspberry Pi Zero 2 W Rev 1.0",
     "sd_card_size": "59G",
