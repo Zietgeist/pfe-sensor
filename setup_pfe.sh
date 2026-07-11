@@ -125,6 +125,7 @@ sudo chown -R pi:pi "$REPO_DIR"
 echo "[8/10] Clearing stale WiFi connections..."
 sudo nmcli connection delete PFE-NET 2>/dev/null || true
 sudo nmcli connection delete PFE-home 2>/dev/null || true
+sudo nmcli connection delete Hotspot 2>/dev/null || true
 echo "Stale connections cleared."
 
 # --- Install systemd service ---
