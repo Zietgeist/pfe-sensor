@@ -2,7 +2,6 @@
 """
 PFE Pressure Sensor — Main
 Same code runs on every device.
-
 Boot sequence:
   1. Zero both sensors
   2. Pick outdoor temp (clicks + 3s timeout, default = sensor reading)
@@ -13,22 +12,18 @@ Boot sequence:
   4. Press to lock baseline → targets calculated automatically
   5. Running: short press = capture suction snapshot
               long hold   = re-enter setup
-
 Hardware auto-detection at boot:
   No MUX → 2 sensors: S1 at 0x25, S2 at 0x26  (original wiring)
   MUX at 0x70 → up to 4 sensors: all at 0x25 on channels 0-3
   Any sensor slot that doesn't respond → None (shown as --)
 """
-
 import sys, os, time, random, threading, subprocess, socket, json, csv, io
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.request import urlopen, Request
 from smbus2 import SMBus, i2c_msg
 from PIL import Image, ImageDraw, ImageFont
-
 sys.path.append('/home/pi/Whisplay/Driver')
 from WhisPlay import WhisPlayBoard
-
 # =============================================================
 # Constants
 # =============================================================
@@ -54,14 +49,12 @@ REPO_DIR      = "/home/pi/pfe-sensor"
 SPLASH_PATH   = f"{REPO_DIR}/marten_screen.png"
 FONT_BOLD     = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 FONT_REG      = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-
 TEMP_CLICK_BANDS    = {1:"auto",2:"<-4",3:"14to-4",4:"32to14",5:">32"}
 TEMP_BAND_LABELS    = {"auto":"AUTO (thermometer)","<-4":"< -4°F",
                        "14to-4":"-4°F to 14°F","32to14":"14°F to 32°F",">32":"> 32°F"}
 TEMP_BAND_MIDPOINT_F = {"<-4":-10.0,"14to-4":5.0,"32to14":23.0,">32":50.0}
 ROOM_OPTIONS        = ["Utility Room","Crawlspace","Sump Pit","Under Stairs",
                        "Storage Room","Mechanical Room","Garage"]
-
 # =============================================================
 # Target pressure tables
 # =============================================================
@@ -69,26 +62,21 @@ def _build_mild():
     gt32   = [0.0,-0.1,-0.2,-0.3,-0.4,-0.5,-0.6,-0.7,-0.8,-0.9,-1.0,-1.1,-1.2,-1.3,-1.4,-1.5,-1.6,-1.7,-1.8,-1.9,-2.0,-2.1,-2.2,-2.3,-2.4,-2.5,-2.6,-2.7,-2.8,-2.9,-3.0,-3.1,-3.2,-3.3,-3.4,-3.5,-3.6,-3.7,-3.8,-3.9,-4.0,-4.1,-4.2,-4.3,-4.4,-4.5,-4.6,-4.7,-4.8,-4.9,-5.0,-5.1,-5.2,-5.3,-5.4,-5.5,-5.6,-5.7,-5.8,-5.9,-6.0]
     t32_14 = [0.0,-0.1,-0.1,-0.2,-0.2,-0.2,-0.3,-0.3,-0.4,-0.4,-0.4,-0.5,-0.5,-0.6,-0.6,-0.6,-0.7,-0.7,-0.8,-0.8,-0.8,-0.9,-0.9,-1.0,-1.0,-1.0,-1.1,-1.1,-1.2,-1.2,-1.2,-1.3,-1.3,-1.4,-1.4,-1.4,-1.5,-1.5,-1.6,-1.6,-1.6,-1.7,-1.7,-1.8,-1.8,-1.8,-1.9,-1.9,-2.0,-2.0,-2.0,-2.1,-2.1,-2.2,-2.2,-2.2,-2.3,-2.3,-2.4,-2.4,-2.4]
     return {i: {">32":gt32[i],"32to14":t32_14[i],"14to-4":0.0,"<-4":0.0} for i in range(61)}
-
 def _build_moderate():
     gt32   = [0.0,-0.2,-0.3,-0.4,-0.5,-0.6,-0.8,-0.9,-1.0,-1.1,-1.2,-1.4,-1.5,-1.6,-1.7,-1.8,-2.0,-2.1,-2.2,-2.3,-2.4,-2.6,-2.7,-2.8,-2.9,-3.0,-3.2,-3.3,-3.4,-3.5,-3.6,-3.8,-3.9,-4.0,-4.1,-4.2,-4.4,-4.5,-4.6,-4.7,-4.8,-5.0,-5.1,-5.2,-5.3,-5.4,-5.6,-5.7,-5.8,-5.9,-6.0,-6.2,-6.3,-6.4,-6.5,-6.6,-6.8,-6.9,-7.0,-7.1,-7.2]
     t32_14 = [0.0,-0.1,-0.1,-0.2,-0.2,-0.3,-0.3,-0.4,-0.4,-0.5,-0.5,-0.6,-0.6,-0.7,-0.7,-0.8,-0.8,-0.9,-0.9,-1.0,-1.0,-1.1,-1.1,-1.2,-1.2,-1.3,-1.3,-1.4,-1.4,-1.5,-1.5,-1.6,-1.6,-1.7,-1.7,-1.8,-1.8,-1.9,-1.9,-2.0,-2.0,-2.1,-2.1,-2.2,-2.2,-2.3,-2.3,-2.4,-2.4,-2.5,-2.5,-2.6,-2.6,-2.7,-2.7,-2.8,-2.8,-2.9,-2.9,-3.0,-3.0]
     return {i: {">32":gt32[i],"32to14":t32_14[i],"14to-4":0.0,"<-4":0.0} for i in range(61)}
-
 def _build_severe():
     gt32   = [0.0,-0.2,-0.3,-0.5,-0.6,-0.8,-0.9,-1.1,-1.2,-1.4,-1.5,-1.7,-1.8,-2.0,-2.1,-2.3,-2.4,-2.6,-2.7,-2.9,-3.0,-3.2,-3.3,-3.5,-3.6,-3.8,-3.9,-4.1,-4.2,-4.4,-4.5,-4.7,-4.8,-5.0,-5.1,-5.3,-5.4,-5.6,-5.7,-5.9,-6.0,-6.2,-6.3,-6.5,-6.6,-6.8,-6.9,-7.1,-7.2,-7.4,-7.5,-7.7,-7.8,-8.0,-8.1,-8.3,-8.4,-8.6,-8.7,-8.9,-9.0]
     t32_14 = [0.0,-0.1,-0.2,-0.2,-0.3,-0.3,-0.4,-0.5,-0.5,-0.6,-0.6,-0.7,-0.8,-0.8,-0.9,-0.9,-1.0,-1.1,-1.1,-1.2,-1.2,-1.3,-1.4,-1.4,-1.5,-1.5,-1.6,-1.7,-1.7,-1.8,-1.8,-1.9,-2.0,-2.0,-2.1,-2.1,-2.2,-2.3,-2.3,-2.4,-2.4,-2.5,-2.6,-2.6,-2.7,-2.7,-2.8,-2.9,-2.9,-3.0,-3.0,-3.1,-3.2,-3.2,-3.3,-3.3,-3.4,-3.5,-3.5,-3.6,-3.6]
     t14_n4 = [0.0,-0.1,-0.1,-0.1,-0.1,-0.1,-0.2,-0.2,-0.2,-0.2,-0.2,-0.3,-0.3,-0.3,-0.3,-0.3,-0.4,-0.4,-0.4,-0.4,-0.4,-0.5,-0.5,-0.5,-0.5,-0.5,-0.6,-0.6,-0.6,-0.6,-0.6,-0.7,-0.7,-0.7,-0.7,-0.7,-0.8,-0.8,-0.8,-0.8,-0.8,-0.9,-0.9,-0.9,-0.9,-0.9,-1.0,-1.0,-1.0,-1.0,-1.0,-1.1,-1.1,-1.1,-1.1,-1.1,-1.2,-1.2,-1.2,-1.2,-1.2]
     return {i: {">32":gt32[i],"32to14":t32_14[i],"14to-4":t14_n4[i],"<-4":0.0} for i in range(61)}
-
 TABLES = {ZONE_MILD:_build_mild(), ZONE_MODERATE:_build_moderate(), ZONE_SEVERE:_build_severe()}
-
 def temp_band_from_f(f):
     if f > 32: return ">32"
     elif f >= 14: return "32to14"
     elif f >= -4: return "14to-4"
     else: return "<-4"
-
 def lookup_target(zone, temp_f, baseline_pa):
     try:
         band = temp_band_from_f(temp_f)
@@ -97,15 +85,12 @@ def lookup_target(zone, temp_f, baseline_pa):
         return TABLES[zone][key][band]
     except Exception:
         return None
-
 def c_to_f(c):
     return c * 9/5 + 32 if c is not None else None
-
 # =============================================================
 # Shared state
 # =============================================================
 lock = threading.Lock()
-
 # Sensor readings — s1/s2 always exist; s3/s4 only populated when MUX present
 current_pressure1 = None
 current_temp1     = None
@@ -117,10 +102,8 @@ zero_offset1      = 0.0
 zero_offset2      = 0.0
 zero_offset3      = 0.0
 zero_offset4      = 0.0
-
 # Hardware config — set once at boot by detect_hardware()
 has_mux = False   # True = MUX found; False = direct 0x25/0x26 wiring
-
 # boot stages: zeroing | pick_temp | pick_zone | lock_baseline | running
 boot_stage       = "zeroing"
 temp_clicks      = 0
@@ -136,21 +119,17 @@ target1          = None
 target2          = None
 target3          = None
 target4          = None
-
 wifi_mode        = "searching"
 sensor_data      = {}
 active           = True
 current_battery  = None
-
 job_info          = {"client_name":"","address":""}
 sensor_labels     = {}
 snapshot_baseline = None
 snapshot_with_fan = None
 data_log          = []
-
 _temp_click_timer = None
 _zone_click_timer = None
-
 # =============================================================
 # Battery
 # =============================================================
@@ -165,7 +144,6 @@ def read_battery():
         return max(0.0, min(100.0, float(data.split(':')[1].strip())))
     except Exception:
         return None
-
 def battery_poll_loop():
     global current_battery
     while True:
@@ -173,7 +151,6 @@ def battery_poll_loop():
         with lock:
             current_battery = val
         time.sleep(30)
-
 def draw_battery_bar(draw, batt):
     if batt is None: return
     batt = max(0.0, min(100.0, batt))
@@ -184,7 +161,6 @@ def draw_battery_bar(draw, batt):
     if fill_h > 0:
         # Fill from the BOTTOM up, like a real battery gauge
         draw.rectangle([bx+1, by+bh-1-fill_h, bx+bw-1, by+bh-1], fill=color)
-
 # =============================================================
 # WiFi
 # =============================================================
@@ -198,7 +174,6 @@ def scan_for(ssid, retries=2):
             print(f"Scan error: {e}")
         time.sleep(2)
     return False
-
 def connect_to(ssid, password):
     try:
         subprocess.run(['sudo','nmcli','dev','wifi','connect',ssid,'password',password],
@@ -208,7 +183,6 @@ def connect_to(ssid, password):
         return True
     except Exception as e:
         print(f"Failed: {e}"); return False
-
 def create_hotspot():
     try:
         subprocess.run(['sudo','nmcli','dev','wifi','hotspot','ifname','wlan0',
@@ -219,7 +193,6 @@ def create_hotspot():
         return True
     except Exception as e:
         print(f"Hotspot error: {e}"); return False
-
 def get_own_ip():
     try:
         r = subprocess.run(['ip','-4','addr','show','wlan0'], capture_output=True, text=True)
@@ -229,7 +202,6 @@ def get_own_ip():
     except Exception:
         pass
     return None
-
 def already_connected_to():
     try:
         r = subprocess.run(['nmcli','-t','-f','ACTIVE,SSID','dev','wifi'],
@@ -240,10 +212,18 @@ def already_connected_to():
     except Exception:
         pass
     return None
-
-from ble_election import elect_host
-
 def setup_wifi():
+    """
+    Decide how this device gets on the network:
+      1. Already connected to home or site wifi? Keep it.
+      2. Home wifi in range? Connect to it (in-shop testing).
+      3. Otherwise we're in the field — no BLE election for now:
+         - If PFE-NET already exists (another device beat us to it),
+           join it as a client.
+         - If not, stand up PFE-NET ourselves as the host.
+      Boot devices a few seconds apart in the field so the first one
+      to reach this point claims the host role before the others scan.
+    """
     global wifi_mode
     cur = already_connected_to()
     if cur == HOME_SSID:  wifi_mode="home";   return "home"
@@ -251,21 +231,15 @@ def setup_wifi():
     if scan_for(HOME_SSID):
         if connect_to(HOME_SSID, HOME_PASSWORD): wifi_mode="home"; return "home"
 
-    # No home wifi found — we're in the field. Let BLE decide who hosts.
-    am_i_host, host_name = elect_host(DEVICE_NAME)
+    # No home wifi found — we're in the field.
+    if scan_for(SITE_SSID, retries=2):
+        if connect_to(SITE_SSID, SITE_PASSWORD):
+            wifi_mode="client"; return "client"
 
-    if am_i_host:
-        if create_hotspot(): wifi_mode="host"; return "host"
-    else:
-        # Give the host a few seconds to stand up its hotspot, then connect
-        for _ in range(10):
-            if scan_for(SITE_SSID, retries=1):
-                if connect_to(SITE_SSID, SITE_PASSWORD):
-                    wifi_mode="client"; return "client"
-            time.sleep(2)
+    if create_hotspot():
+        wifi_mode="host"; return "host"
 
     wifi_mode="searching"; return "searching"
-
 # =============================================================
 # Sensor — hardware detection + reading
 # =============================================================
@@ -281,20 +255,16 @@ def detect_hardware(bus):
     except Exception:
         print("No MUX — direct mode (S1=0x25, S2=0x26)")
         return False
-
 def _select_mux_channel(bus, channel):
     bus.write_byte(MUX_ADDR, 1 << channel)
-
 def _disable_mux(bus):
     bus.write_byte(MUX_ADDR, 0)
-
 def _soft_reset(bus):
     try:
         bus.i2c_rdwr(i2c_msg.write(0x00, [0x06]))
         time.sleep(0.05)
     except Exception:
         pass
-
 def read_sdp_raw(bus, address):
     """Read one SDP sensor at the given address. Returns (pressure_pa, temp_c) or (None, None)."""
     try:
@@ -312,12 +282,10 @@ def read_sdp_raw(bus, address):
         return raw_p / scale, raw_t / 200.0
     except Exception:
         return None, None
-
 def read_all_raw(bus, mux_present):
     """
     Read all sensors. Returns four (pressure, temp) tuples.
     Slots with no sensor return (None, None).
-
     No MUX:   S1=0x25, S2=0x26, S3=None, S4=None
     MUX:      S1=ch0/0x25, S2=ch1/0x25, S3=ch2/0x25, S4=ch3/0x25
     """
@@ -335,7 +303,6 @@ def read_all_raw(bus, mux_present):
         r1 = read_sdp_raw(bus, SDP_ADDR_1)
         r2 = read_sdp_raw(bus, SDP_ADDR_2)
         return r1, r2, (None, None), (None, None)
-
 # =============================================================
 # Boot sequence
 # =============================================================
@@ -343,7 +310,6 @@ def do_zeroing(bus, mux_present):
     global zero_offset1, zero_offset2, zero_offset3, zero_offset4
     global boot_stage, temp_band_choice, outdoor_temp_f
     print("Zeroing sensors...")
-
     s1, s2, s3, s4, st = [], [], [], [], []
     for _ in range(ZERO_SAMPLES):
         r1, r2, r3, r4 = read_all_raw(bus, mux_present)
@@ -352,13 +318,11 @@ def do_zeroing(bus, mux_present):
             if p is not None: bucket.append(p)
             if t is not None: st.append(t)
         time.sleep(0.05)
-
     with lock:
         zero_offset1 = sum(s1)/len(s1) if s1 else 0.0
         zero_offset2 = sum(s2)/len(s2) if s2 else 0.0
         zero_offset3 = sum(s3)/len(s3) if s3 else 0.0
         zero_offset4 = sum(s4)/len(s4) if s4 else 0.0
-
     avg_c  = sum(st)/len(st) if st else None
     temp_f = c_to_f(avg_c) if avg_c is not None else 50.0
     resolved = temp_band_from_f(temp_f)
@@ -369,13 +333,11 @@ def do_zeroing(bus, mux_present):
     print(f"Zero offsets — S1:{zero_offset1:.3f} S2:{zero_offset2:.3f} "
           f"S3:{zero_offset3:.3f} S4:{zero_offset4:.3f}  AutoTemp:{temp_f:.1f}°F → {resolved}")
     _start_temp_default_timer()
-
 def _start_temp_default_timer():
     global _temp_click_timer
     if _temp_click_timer: _temp_click_timer.cancel()
     _temp_click_timer = threading.Timer(CLICK_TIMEOUT, _temp_default_accept)
     _temp_click_timer.start()
-
 def _temp_default_accept():
     global boot_stage, _temp_click_timer
     with lock:
@@ -384,13 +346,11 @@ def _temp_default_accept():
         _temp_click_timer = None
     print("Temp defaulted")
     _start_zone_default_timer()
-
 def _start_zone_default_timer():
     global _zone_click_timer
     if _zone_click_timer: _zone_click_timer.cancel()
     _zone_click_timer = threading.Timer(CLICK_TIMEOUT, _zone_default_accept)
     _zone_click_timer.start()
-
 def _zone_default_accept():
     global boot_stage, _zone_click_timer
     with lock:
@@ -398,7 +358,6 @@ def _zone_default_accept():
         boot_stage = "lock_baseline"
         _zone_click_timer = None
     print(f"Zone defaulted: {climate_zone}")
-
 def _temp_timeout():
     global boot_stage, temp_band_choice, outdoor_temp_f, _temp_click_timer
     with lock:
@@ -421,7 +380,6 @@ def _temp_timeout():
         _temp_click_timer = None
     print(f"Temp set: {temp_f:.1f}°F → {resolved}")
     _start_zone_default_timer()
-
 def _zone_timeout():
     global boot_stage, _zone_click_timer
     with lock:
@@ -429,16 +387,13 @@ def _zone_timeout():
             boot_stage = "lock_baseline"
             _zone_click_timer = None
     print(f"Zone set: {climate_zone}")
-
 def advance_boot_stage():
     global boot_stage, temp_clicks, zone_clicks, climate_zone
     global baseline1, baseline2, baseline3, baseline4
     global target1, target2, target3, target4
     global _temp_click_timer, _zone_click_timer, snapshot_baseline, snapshot_with_fan
-
     with lock:
         stage = boot_stage
-
     if stage == "pick_temp":
         if _temp_click_timer: _temp_click_timer.cancel()
         with lock:
@@ -447,7 +402,6 @@ def advance_boot_stage():
         _temp_click_timer = threading.Timer(CLICK_TIMEOUT, _temp_timeout)
         _temp_click_timer.start()
         print(f"Temp click {clicks}")
-
     elif stage == "pick_zone":
         if _zone_click_timer: _zone_click_timer.cancel()
         with lock:
@@ -457,7 +411,6 @@ def advance_boot_stage():
         _zone_click_timer = threading.Timer(CLICK_TIMEOUT, _zone_timeout)
         _zone_click_timer.start()
         print(f"Zone click {zc} → {climate_zone}")
-
     elif stage == "lock_baseline":
         with lock:
             p1 = current_pressure1
@@ -481,7 +434,6 @@ def advance_boot_stage():
         print(f"Baseline locked — "
               f"S1:{baseline1}→{target1}Pa  S2:{baseline2}→{target2}Pa  "
               f"S3:{baseline3}→{target3}Pa  S4:{baseline4}→{target4}Pa")
-
     elif stage == "running":
         with lock:
             snap = {}
@@ -491,7 +443,6 @@ def advance_boot_stage():
                                 "label":sensor_labels.get(device, d.get("label","")),"time":d.get("time")}
             snapshot_with_fan = snap
         print("Suction snapshot captured")
-
 def re_enter_setup():
     global boot_stage, temp_clicks, temp_band_choice, outdoor_temp_f
     global zone_clicks, climate_zone
@@ -507,16 +458,13 @@ def re_enter_setup():
         target1=None;    target2=None;   target3=None;   target4=None
         snapshot_baseline=None; snapshot_with_fan=None
     print("Setup restarted")
-
 # =============================================================
 # Button
 # =============================================================
 _button_press_time = None
-
 def button_down():
     global _button_press_time
     _button_press_time = time.time()
-
 def button_up():
     global active, _button_press_time
     if _button_press_time is None: return
@@ -528,7 +476,6 @@ def button_up():
         if stage == "running": re_enter_setup()
         return
     advance_boot_stage()
-
 # =============================================================
 # Data logging
 # =============================================================
@@ -544,7 +491,6 @@ def append_log_row(device, d):
             if d.get(k) is not None: row[f"{k}_pa"] = round(d[k], 3)
         if d.get("temp1") is not None: row["temp1_c"] = round(d["temp1"], 2)
         data_log.append(row)
-
 def data_log_loop():
     while True:
         time.sleep(60)
@@ -553,7 +499,6 @@ def data_log_loop():
         for device, d in devices.items():
             append_log_row(device, d)
         print(f"Log: {len(data_log)} rows")
-
 def get_log_csv():
     with lock:
         rows=list(data_log); client=job_info.get("client_name",""); addr=job_info.get("address","")
@@ -563,7 +508,6 @@ def get_log_csv():
         w = csv.DictWriter(out, fieldnames=rows[0].keys())
         w.writeheader(); w.writerows(rows)
     return out.getvalue()
-
 def get_snapshot_csv():
     with lock:
         bl=dict(snapshot_baseline) if snapshot_baseline else {}
@@ -588,13 +532,11 @@ def get_snapshot_csv():
             row.append(round(wv-bv,3) if wv is not None and bv is not None else "")
         w.writerow(row)
     return out.getvalue()
-
 # =============================================================
 # Web server
 # =============================================================
 class DashboardHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args): pass
-
     def do_GET(self):
         if self.path == '/data':
             with lock:
@@ -611,13 +553,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_csv(get_snapshot_csv(), "pfe_snapshots.csv")
         else:
             self.send_response(404); self.end_headers()
-
     def do_POST(self):
         length = int(self.headers.get('Content-Length', 0))
         body   = self.rfile.read(length)
         try: payload = json.loads(body)
         except Exception: self.send_response(400); self.end_headers(); return
-
         if self.path == '/report':
             name = payload.get('name')
             if name:
@@ -630,13 +570,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                        'time':time.time()}
                     if payload.get('label'): sensor_labels[name]=payload['label']
             self.send_response(200); self.end_headers(); self.wfile.write(b'OK')
-
         elif self.path == '/set_job':
             with lock:
                 job_info['client_name']=payload.get('client_name','')
                 job_info['address']=payload.get('address','')
             self.send_response(200); self.end_headers(); self.wfile.write(b'OK')
-
         elif self.path == '/set_label':
             device=payload.get('device'); label=payload.get('label','')
             if device:
@@ -644,7 +582,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     sensor_labels[device]=label
                     if device in sensor_data: sensor_data[device]['label']=label
             self.send_response(200); self.end_headers(); self.wfile.write(b'OK')
-
         elif self.path == '/snapshot':
             which=payload.get('which','baseline')
             with lock:
@@ -655,25 +592,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 if which=='baseline': snapshot_baseline=snap
                 else:                 snapshot_with_fan=snap
             self.send_response(200); self.end_headers(); self.wfile.write(b'OK')
-
         else:
             self.send_response(404); self.end_headers()
-
     def _send_json(self, data):
         body=json.dumps(data).encode()
         self.send_response(200); self.send_header('Content-Type','application/json')
         self.send_header('Access-Control-Allow-Origin','*'); self.end_headers(); self.wfile.write(body)
-
     def _send_html(self, html):
         self.send_response(200); self.send_header('Content-Type','text/html')
         self.end_headers(); self.wfile.write(html.encode())
-
     def _send_csv(self, data, filename):
         self.send_response(200); self.send_header('Content-Type','text/csv')
         self.send_header('Content-Disposition',f'attachment; filename="{filename}"')
         self.end_headers(); self.wfile.write(data.encode())
-
-
 def build_dashboard_html():
     return """<!DOCTYPE html>
 <html>
@@ -787,36 +718,30 @@ h1 { text-align: center; margin-bottom: 4px; font-size: 1.5em; letter-spacing: 2
   <div id="footer"></div>
   <script>
 const localLabels = {};
-
 async function saveJob() {
   await fetch('/set_job',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({client_name:document.getElementById('client-name').value,
                          address:document.getElementById('address').value})});
 }
-
 async function takeSnapshot(which) {
   await fetch('/snapshot',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({which})});
 }
-
 async function onLabelBlur(key, input) {
   const label = input.value.trim();
   localLabels[key] = label;
   await fetch('/set_label',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({device:key, label})});
 }
-
 const SENSOR_DEFS = [
   {k:'s1', tk:'tgt1', label:'Sensor 1'},
   {k:'s2', tk:'tgt2', label:'Sensor 2'},
   {k:'s3', tk:'tgt3', label:'Sensor 3'},
   {k:'s4', tk:'tgt4', label:'Sensor 4'},
 ];
-
 function hasMuxSensors(s) {
   return s.s3 !== null && s.s3 !== undefined || s.s4 !== null && s.s4 !== undefined;
 }
-
 function sensorBoxHTML(sensorKey, headerLabel, val, tgt, stale, currentLabel) {
   let boxCls, valHTML, subHTML, badgeHTML='';
   if (stale || val===null || val===undefined) {
@@ -843,7 +768,6 @@ function sensorBoxHTML(sensorKey, headerLabel, val, tgt, stale, currentLabel) {
     </div>
   </div>`;
 }
-
 function updateSensorBox(sensorKey, headerLabel, val, tgt, stale) {
   const box = document.getElementById('box-'+sensorKey);
   if (!box) return false;
@@ -871,27 +795,21 @@ function updateSensorBox(sensorKey, headerLabel, val, tgt, stale) {
   if (oldSub.length > 1) oldSub[0].remove();
   return true;
 }
-
 let knownDevices = new Set();
-
 async function refresh() {
   try {
     const res=await fetch('/data'); const data=await res.json();
     const sensors=data.sensors||{}, serverLabels=data.labels||{};
-
     if (data.job) {
       const cn=document.getElementById('client-name'), ad=document.getElementById('address');
       if (!cn.value) cn.value=data.job.client_name||'';
       if (!ad.value) ad.value=data.job.address||'';
     }
-
     for (const [key, lbl] of Object.entries(serverLabels)) {
       if (!(key in localLabels)) localLabels[key] = lbl;
     }
-
     const names=Object.keys(sensors).sort();
     const grid=document.getElementById('grid');
-
     if (!names.length) {
       grid.innerHTML='<div class="no-sensors">Waiting for sensors...</div>';
       knownDevices.clear();
@@ -899,7 +817,6 @@ async function refresh() {
       const newDevices = names.filter(n => !knownDevices.has(n));
       const gone = [...knownDevices].filter(n => !sensors[n]);
       gone.forEach(n => { const el=document.getElementById('card-'+n); if (el) el.remove(); knownDevices.delete(n); });
-
       newDevices.forEach(name => {
         const s=sensors[name], stale=s.age>30;
         const isFour = hasMuxSensors(s);
@@ -922,7 +839,6 @@ async function refresh() {
         else grid.insertBefore(card,cards[idx]);
         knownDevices.add(name);
       });
-
       names.forEach(name => {
         if (newDevices.includes(name)) return;
         const s=sensors[name], stale=s.age>30;
@@ -936,13 +852,10 @@ async function refresh() {
           updateSensorBox(key, def.label, s[def.k], s[def.tk], stale);
         });
       });
-
       const ns=grid.querySelector('.no-sensors');
       if (ns) ns.remove();
     }
-
     document.getElementById('sub').textContent=names.length+' device(s) online';
-
     const bl=data.snapshot_baseline, wf=data.snapshot_with_fan;
     const wrap=document.getElementById('snap-wrap'), tbody=document.getElementById('snap-tbody');
     if (bl&&wf) {
@@ -966,7 +879,6 @@ async function refresh() {
         </tr>`;
       }).join('');
     } else { wrap.classList.remove('visible'); }
-
     document.getElementById('footer').textContent='Updated: '+new Date().toLocaleTimeString();
   } catch(e) { document.getElementById('footer').textContent='Connection lost...'; }
 }
@@ -974,7 +886,6 @@ refresh(); setInterval(refresh,2000);
   </script>
 </body>
 </html>"""
-
 def run_web_server():
     try:
         server = HTTPServer(('0.0.0.0', WEB_PORT), DashboardHandler)
@@ -982,7 +893,6 @@ def run_web_server():
         server.serve_forever()
     except Exception as e:
         print(f"Web server error: {e}")
-
 # =============================================================
 # Data reporter (client only)
 # =============================================================
@@ -1005,7 +915,6 @@ def report_data_loop(host_ip):
         except Exception as e:
             print(f"Report error: {e}")
         time.sleep(1)
-
 # =============================================================
 # Screen
 # =============================================================
@@ -1015,29 +924,24 @@ def load_splash():
         return image_to_pixels(img)
     except Exception:
         return None
-
 def image_to_pixels(img):
     pixels=[]
     for r,g,b in img.getdata():
         rgb565=((r&0xF8)<<8)|((g&0xFC)<<3)|(b>>3)
         pixels.extend([(rgb565>>8)&0xFF, rgb565&0xFF])
     return pixels
-
 def _font(size, bold=False):
     try: return ImageFont.truetype(FONT_BOLD if bold else FONT_REG, size)
     except Exception: return ImageFont.load_default()
-
 def make_screen_boot(stage, temp_c):
     img=Image.new('RGB',(240,280),(0,0,0)); draw=ImageDraw.Draw(img)
     f_big=_font(34,True); f_med=_font(18,True); f_small=_font(14,False); f_tiny=_font(12,False)
     draw.text((6,4),DEVICE_NAME,font=f_small,fill=(120,120,255))
     draw.text((160,4),"SETUP",font=f_small,fill=(255,200,50))
     draw.line([(0,24),(240,24)],fill=(50,50,50),width=1)
-
     if stage=="zeroing":
         draw.text((20,60),"Zeroing sensors...",font=f_small,fill=(180,180,180))
         draw.text((20,90),"Please wait",font=f_tiny,fill=(120,120,120))
-
     elif stage=="pick_temp":
         with lock: tf=outdoor_temp_f; tc=temp_clicks
         draw.text((6,32),"Outdoor temp?",font=f_med,fill=(200,200,255))
@@ -1056,7 +960,6 @@ def make_screen_boot(stage, temp_c):
                 draw.ellipse([6+i*22,58,6+i*22+14,72],fill=col)
             draw.text((6,82),label,font=f_med,fill=color)
             draw.text((6,200),"Wait 3s to confirm",font=f_tiny,fill=(180,180,80))
-
     elif stage=="pick_zone":
         with lock: zc=zone_clicks; z=climate_zone
         draw.text((6,32),"Climate zone?",font=f_med,fill=(200,200,255))
@@ -1072,7 +975,6 @@ def make_screen_boot(stage, temp_c):
             draw.text((6,210),"Wait 3s to confirm",font=f_tiny,fill=(180,180,80))
         with lock: tbc=temp_band_choice
         if tbc: draw.text((6,254),f"Temp: {TEMP_BAND_LABELS.get(tbc,'?')}",font=f_tiny,fill=(80,80,160))
-
     elif stage=="lock_baseline":
         draw.text((6,32),"Ready to lock",font=f_med,fill=(200,200,255))
         draw.text((6,58),"baseline pressure",font=f_med,fill=(200,200,255))
@@ -1082,11 +984,9 @@ def make_screen_boot(stage, temp_c):
         if tbc: draw.text((6,175),f"Temp: {TEMP_BAND_LABELS.get(tbc,'?')}",font=f_tiny,fill=(80,120,200))
         draw.text((6,195),f"Zone: {z.upper()}",font=f_tiny,fill=(80,120,200))
         draw.text((6,230),"Press to lock baseline",font=f_tiny,fill=(180,180,80))
-
     with lock: batt=current_battery
     draw_battery_bar(draw,batt)
     return image_to_pixels(img)
-
 def make_screen_running(p1, p2, p3, p4, t1, tgt1, tgt2, tgt3, tgt4, mode, mux_present):
     img=Image.new('RGB',(240,280),(0,0,0)); draw=ImageDraw.Draw(img)
     f_big=_font(38,True); f_med=_font(18,True); f_small=_font(14,False); f_tiny=_font(12,False)
@@ -1097,7 +997,6 @@ def make_screen_running(p1, p2, p3, p4, t1, tgt1, tgt2, tgt3, tgt4, mode, mux_pr
     draw.text((6,4),DEVICE_NAME,font=f_small,fill=(120,120,255))
     draw.text((160,4),mode_labels.get(mode,"?"),font=f_small,fill=mode_colors.get(mode,(160,160,160)))
     draw.line([(0,24),(240,24)],fill=(50,50,50),width=1)
-
     if not mux_present:
         # Original 2-sensor layout (big numbers)
         def draw_sensor(label, pressure, target, y_top):
@@ -1114,10 +1013,8 @@ def make_screen_running(p1, p2, p3, p4, t1, tgt1, tgt2, tgt3, tgt4, mode, mux_pr
                 draw.text((148,y_top+16),"Pa",font=f_med,fill=color)
                 draw.text((6,y_top+65),f"Target: {target:.2f} Pa",font=f_small,fill=(180,180,180))
             draw.line([(0,y_top+85),(240,y_top+85)],fill=(40,40,40),width=1)
-
         draw_sensor("SENSOR 1", p1, tgt1, 28)
         draw_sensor("SENSOR 2", p2, tgt2, 118)
-
     else:
         # Compact 2x2 layout for 4 sensors
         f_cmed=_font(16,True); f_ctiny=_font(11,False)
@@ -1138,7 +1035,6 @@ def make_screen_running(p1, p2, p3, p4, t1, tgt1, tgt2, tgt3, tgt4, mode, mux_pr
             if x==0:
                 draw.line([(120,y-2),(120,y+110)],fill=(50,50,50),width=1)
             draw.line([(0,y+112),(240,y+112)],fill=(40,40,40),width=1)
-
     # Footer
     with lock: tbc=temp_band_choice; z=climate_zone
     draw.text((6,215),TEMP_BAND_LABELS.get(tbc,"Temp not set"),font=f_tiny,fill=(100,100,200))
@@ -1154,7 +1050,6 @@ def make_screen_running(p1, p2, p3, p4, t1, tgt1, tgt2, tgt3, tgt4, mode, mux_pr
     with lock: batt=current_battery
     draw_battery_bar(draw,batt)
     return image_to_pixels(img)
-
 def screen_thread(board, mux_present):
     last=None
     while True:
@@ -1179,7 +1074,6 @@ def screen_thread(board, mux_present):
             board.draw_image(0,0,240,280,screen_data)
             last=current
         time.sleep(0.5)
-
 # =============================================================
 # Main
 # =============================================================
@@ -1188,69 +1082,55 @@ board = WhisPlayBoard()
 board.set_backlight(80)
 board.on_button_press(button_down)
 board.on_button_release(button_up)
-
 splash = load_splash()
 if splash:
     board.draw_image(0,0,240,280,splash)
     time.sleep(2)
-
 def wifi_and_serve():
     mode = setup_wifi()
     print(f"WiFi mode: {mode}")
     if mode == "host":
         threading.Thread(target=data_log_loop, daemon=True).start()
         run_web_server()
-
 threading.Thread(target=battery_poll_loop, daemon=True).start()
 threading.Thread(target=wifi_and_serve, daemon=True).start()
-
 with SMBus(1) as bus:
     # ── Detect hardware once at boot ──────────────────────────
     mux_found = detect_hardware(bus)
     with lock:
         has_mux = mux_found
-
     # Screen starts after hardware is known (needs mux_found to pick layout)
     threading.Thread(target=screen_thread, args=(board, mux_found), daemon=True).start()
-
     # ── Zero all present sensors ──────────────────────────────
     do_zeroing(bus, mux_found)
-
     # ── Main loop ─────────────────────────────────────────────
     while True:
         r1, r2, r3, r4 = read_all_raw(bus, mux_found)
-
         p1_raw, t1 = r1
         p2_raw, t2 = r2
         p3_raw, t3 = r3
         p4_raw, t4 = r4
-
         with lock:
             zo1=zero_offset1; zo2=zero_offset2; zo3=zero_offset3; zo4=zero_offset4
-
         p1 = (p1_raw - zo1) if p1_raw is not None else None
         p2 = (p2_raw - zo2) if p2_raw is not None else None
         p3 = (p3_raw - zo3) if p3_raw is not None else None
         p4 = (p4_raw - zo4) if p4_raw is not None else None
-
         with lock:
             current_pressure1=p1; current_temp1=t1
             current_pressure2=p2; current_temp2=t2
             current_pressure3=p3
             current_pressure4=p4
             mode=wifi_mode; tg1=target1; tg2=target2; tg3=target3; tg4=target4
-
         if mode == "host":
             with lock:
                 sensor_data[DEVICE_NAME]={'s1':p1,'s2':p2,'s3':p3,'s4':p4,
                                            'tgt1':tg1,'tgt2':tg2,'tgt3':tg3,'tgt4':tg4,
                                            'temp1':t1,'label':sensor_labels.get(DEVICE_NAME,''),
                                            'time':time.time()}
-
         if mode == "client":
             threading.Thread(target=report_data_loop, args=(HOST_IP,), daemon=True).start()
             with lock: wifi_mode="client_reporting"
-
         parts = [f"S1:{f'{p1:.2f}Pa' if p1 is not None else '--'}",
                  f"S2:{f'{p2:.2f}Pa' if p2 is not None else '--'}"]
         if mux_found:
