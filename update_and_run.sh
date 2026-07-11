@@ -85,4 +85,14 @@ echo "Code updated." >> "$LOG"
 
 bash "$REPO_DIR/report_status.sh" >> "$LOG" 2>&1
 
-exec python3 "$MAIN_SCRIPT" >> "$LOG" 2>&1
+# Everything above this line (DNS wait, git pull, timezone check, WiFi
+# decisions) gets appended to $LOG — that's a handful of lines per boot,
+# stays small, and is easy to grep/cat. The sensor app below prints a
+# status line about once a second while running, forever, and used to get
+# appended to this same file too — with nothing ever clearing it out, that
+# made pfe_update.log grow without bound and turned it into a slog to read
+# through. Since this runs as a systemd service, dropping the redirect
+# here doesn't lose that output — it flows to the system journal
+# automatically instead, which already handles rotation/size-capping on
+# its own. Watch it live with: sudo journalctl -u pfe-sensor -f
+exec python3 "$MAIN_SCRIPT"
