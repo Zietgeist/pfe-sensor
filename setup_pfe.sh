@@ -70,25 +70,25 @@ echo "This device will be named: $DEVICE_NAME"
 echo ""
 
 # --- Set hostname ---
-echo "[1/9] Setting hostname to $DEVICE_NAME..."
+echo "[1/10] Setting hostname to $DEVICE_NAME..."
 sudo hostnamectl set-hostname "$DEVICE_NAME" || echo "hostnamectl failed, using fallback..."
 echo "$DEVICE_NAME" | sudo tee /etc/hostname > /dev/null
 sudo sed -i "s/127\.0\.1\.1.*/127.0.1.1\t$DEVICE_NAME/" /etc/hosts
 echo "Hostname set to $DEVICE_NAME."
 
 # --- Update package list only (no full upgrade) ---
-echo "[2/9] Updating package list..."
+echo "[2/10] Updating package list..."
 sudo apt update
 
 # --- Install dependencies ---
 # NOTE: python3-spidev, python3-libgpiod, and i2c-tools were added here.
 # WhisPlay.py (the screen driver) imports spidev + gpiod directly, and
 # report_status.sh calls i2cdetect — none of that worked without these.
-echo "[3/9] Installing dependencies..."
+echo "[3/10] Installing dependencies..."
 sudo apt install -y git python3-pip python3-pil python3-smbus2 python3-spidev python3-libgpiod i2c-tools network-manager bluetooth bluez
 
 # --- Install BLE election packages (for host self-organizing) ---
-echo "[4/9] Installing Bluetooth packages for device election..."
+echo "[4/10] Installing Bluetooth packages for device election..."
 sudo apt install -y libcairo2-dev libgirepository1.0-dev pkg-config python3-dev python3-dbus
 sudo pip3 install --break-system-packages bleak bluezero
 sudo rfkill unblock bluetooth
@@ -101,7 +101,7 @@ echo "Bluetooth packages installed and service running."
 # (Whisplay/Driver/install_wm8960_drive.sh) no longer exists and this step
 # was silently failing. The new entry point is install_driver.sh at the repo
 # root, which auto-detects the board and installs the right driver.
-echo "[5/9] Installing Whisplay HAT driver..."
+echo "[5/10] Installing Whisplay HAT driver..."
 cd /home/pi
 git clone https://github.com/PiSugar/Whisplay.git --depth 1
 cd /home/pi/Whisplay
@@ -109,26 +109,26 @@ echo "y" | sudo bash install_driver.sh
 echo "Whisplay install done. Continuing (reboot comes at the end)..."
 
 # --- Enable I2C and SPI ---
-echo "[6/9] Enabling I2C and SPI..."
+echo "[6/10] Enabling I2C and SPI..."
 sudo raspi-config nonint do_i2c 0
 sudo raspi-config nonint do_spi 0
 echo "I2C and SPI enabled."
 
 # --- Repo already cloned above — just make sure it's current ---
-echo "[7/9] Confirming PFE repo is up to date..."
+echo "[7/10] Confirming PFE repo is up to date..."
 cd "$REPO_DIR"
 git fetch origin main > /dev/null 2>&1
 git reset --hard origin/main > /dev/null 2>&1
 sudo chown -R pi:pi "$REPO_DIR"
 
 # --- Clear stale nmcli connections ---
-echo "[8/9] Clearing stale WiFi connections..."
+echo "[8/10] Clearing stale WiFi connections..."
 sudo nmcli connection delete PFE-NET 2>/dev/null || true
 sudo nmcli connection delete PFE-home 2>/dev/null || true
 echo "Stale connections cleared."
 
 # --- Install systemd service ---
-echo "[9/9] Installing autostart service..."
+echo "[9/10] Installing autostart service..."
 sudo tee /etc/systemd/system/pfe-sensor.service > /dev/null <<EOF
 [Unit]
 Description=PFE Sensor — auto-update and run
@@ -146,6 +146,30 @@ WantedBy=multi-user.target
 EOF
 sudo systemctl daemon-reload
 sudo systemctl enable pfe-sensor.service
+
+# --- Install boot splash service ---
+# NOTE: Shows the logo on screen right after power-on, before networking,
+# git pulls, or Bluetooth get a chance to slow things down. Runs once via
+# boot_splash.py (in the repo) and exits; pfe-sensor.service takes over
+# the screen once the main app gets that far. Without this, the screen
+# stays blank for however long WiFi/git/network takes to settle.
+echo "[10/10] Installing boot splash service..."
+sudo tee /etc/systemd/system/pfe-boot-splash.service > /dev/null <<EOF
+[Unit]
+Description=PFE Boot Splash — show logo before networking/git/sensors start
+DefaultDependencies=no
+After=local-fs.target
+Before=pfe-sensor.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/pi/pfe-sensor/boot_splash.py
+RemainAfterExit=no
+TimeoutStartSec=10
+[Install]
+WantedBy=sysinit.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable pfe-boot-splash.service
 
 echo ""
 echo "================================================"
