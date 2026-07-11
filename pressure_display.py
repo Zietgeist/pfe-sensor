@@ -28,8 +28,12 @@ from WhisPlay import WhisPlayBoard
 # Constants
 # =============================================================
 DEVICE_NAME   = os.uname().nodename
-SDP_ADDR_1    = 0x25   # S1: direct or MUX ch0
-SDP_ADDR_2    = 0x26   # S2: direct only (no MUX; all MUX sensors use 0x25)
+SDP_ADDR_1    = 0x25   # S1: direct or MUX ch0 — this is an SDP810 (fixed addr 0x25)
+SDP_ADDR_2    = 0x26   # S2: direct only (no MUX; all MUX sensors use 0x25) — SDP811 (fixed addr 0x26)
+# SDP810/SDP811 are used as a pair specifically because their I2C addresses
+# are hardcoded and different, so both can share one bus with no address
+# conflict and no multiplexer. A 3rd/4th sensor (any SDP8xx at 0x25) needs
+# the MUX at MUX_ADDR to avoid colliding with S1.
 MUX_ADDR      = 0x70   # TCA9548A / PCA9548A
 MUX_CHANNELS  = [0, 1, 2, 3]
 HOME_SSID     = "PFE-home"
