@@ -17,7 +17,7 @@ Hardware auto-detection at boot:
   MUX at 0x70 → up to 4 sensors: all at 0x25 on channels 0-3
   Any sensor slot that doesn't respond → None (shown as --)
 """
-import sys, os, time, random, threading, subprocess, socket, json, csv, io
+import sys, os, re, time, random, threading, subprocess, socket, json, csv, io
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.request import urlopen, Request
 from smbus2 import SMBus, i2c_msg
@@ -28,6 +28,12 @@ from WhisPlay import WhisPlayBoard
 # Constants
 # =============================================================
 DEVICE_NAME   = os.uname().nodename
+def own_device_num():
+    """Pull the trailing number off DEVICE_NAME, e.g. 'PFE-4' -> 4. If the
+    hostname doesn't follow the PFE-<n> pattern for some reason, fall back
+    to a very high number so this device never wins a lowest-number tie-break."""
+    m = re.search(r'(\d+)$', DEVICE_NAME)
+    return int(m.group(1)) if m else 999
 SDP_ADDR_1    = 0x25   # S1: direct or MUX ch0 — this is an SDP810 (fixed addr 0x25)
 SDP_ADDR_2    = 0x26   # S2: direct only (no MUX; all MUX sensors use 0x25) — SDP811 (fixed addr 0x26)
 # SDP810/SDP811 are used as a pair specifically because their I2C addresses
@@ -38,8 +44,16 @@ MUX_ADDR      = 0x70   # TCA9548A / PCA9548A
 MUX_CHANNELS  = [0, 1, 2, 3]
 HOME_SSID     = "PFE-home"
 HOME_PASSWORD = "pferadon1"
-SITE_SSID     = "PFE-NET"
+# Each device hosts its OWN uniquely-numbered network in the field
+# (PFE-NET-1, PFE-NET-4, etc.) instead of every device broadcasting the
+# identical name "PFE-NET". Sharing one name across multiple hosts made
+# it impossible for nmcli (or a client device) to tell "the real host"
+# apart from another device that also ended up self-hosting — connects
+# would fail outright or land on the wrong one at random. See
+# own_device_num() / MY_SITE_SSID below.
+SITE_SSID_PREFIX = "PFE-NET-"
 SITE_PASSWORD = "pferadon1"
+MY_SITE_SSID  = f"{SITE_SSID_PREFIX}{own_device_num()}"  # this device's own hosted network name, if it ends up hosting
 HOST_IP       = "10.42.0.1"
 WEB_PORT      = 80
 ZONE_MILD     = "mild"
@@ -178,6 +192,30 @@ def scan_for(ssid, retries=2):
             print(f"Scan error: {e}")
         time.sleep(2)
     return False
+def scan_for_site_hosts(retries=2):
+    """
+    Look for any PFE-NET-<n> network currently in range (i.e. any device
+    that's already hosting), excluding our own number. Returns a sorted
+    list of the device numbers found — hosts[0], if any, is the one we
+    should join, since "lowest number wins" is our tie-breaker.
+    """
+    found = set()
+    for _ in range(retries):
+        try:
+            r = subprocess.run(['sudo','nmcli','-t','-f','SSID','dev','wifi','list','--rescan','yes'],
+                               capture_output=True, text=True, timeout=20)
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if line.startswith(SITE_SSID_PREFIX):
+                    tail = line[len(SITE_SSID_PREFIX):]
+                    if tail.isdigit() and int(tail) != own_device_num():
+                        found.add(int(tail))
+        except Exception as e:
+            print(f"Scan error: {e}")
+        if found:
+            return sorted(found)
+        time.sleep(2)
+    return sorted(found)
 def connect_to(ssid, password):
     try:
         subprocess.run(['sudo','nmcli','dev','wifi','connect',ssid,'password',password],
@@ -187,13 +225,13 @@ def connect_to(ssid, password):
         return True
     except Exception as e:
         print(f"Failed: {e}"); return False
-def create_hotspot():
+def create_hotspot(ssid):
     try:
         subprocess.run(['sudo','nmcli','dev','wifi','hotspot','ifname','wlan0',
-		                'ssid',SITE_SSID,'password',SITE_PASSWORD,'band','bg'],
+		                'ssid',ssid,'password',SITE_PASSWORD,'band','bg'],
 		               check=True, timeout=30)
         time.sleep(3)
-        print(f"Hotspot up: {SITE_SSID}")
+        print(f"Hotspot up: {ssid}")
         return True
     except Exception as e:
         print(f"Hotspot error: {e}"); return False
@@ -219,12 +257,21 @@ def already_connected_to():
 def setup_wifi():
     """
     Decide how this device gets on the network:
-      1. Already connected to home or site wifi? Keep it.
+      1. Already connected to home or a PFE site network? Keep it.
       2. Home wifi in range? Connect to it (in-shop testing).
       3. Otherwise we're in the field — no BLE election for now:
-         - If PFE-NET already exists (another device beat us to it),
-           join it as a client.
-         - If not, stand up PFE-NET ourselves as the host.
+         - Each device hosts its OWN uniquely-numbered network if it
+           ends up hosting (PFE-NET-<n>, from its device number), not a
+           shared name. Every device broadcasting the identical name
+           "PFE-NET" made it impossible for nmcli (or us) to tell "the
+           real host" apart from another device that also ended up
+           self-hosting — connect attempts failed outright or landed on
+           the wrong one at random. See own_device_num()/MY_SITE_SSID.
+         - If one or more PFE-NET-<n> networks are already up, join the
+           LOWEST-numbered one. Every device applies the same rule, so
+           even if two devices briefly host at once, everyone converges
+           on the same one.
+         - If none exist, stand up our own PFE-NET-<our number>.
       Boot devices a few seconds apart in the field so the first one
       to reach this point claims the host role before the others scan.
 
@@ -235,19 +282,22 @@ def setup_wifi():
       hotspot up yet, and mistakenly host its own instead of waiting.
       This scans longer and adds a small random pause before giving up,
       so slower devices get more of a chance to find an already-up
-      PFE-NET, and devices don't all give up in the same instant.
+      host, and devices don't all give up in the same instant.
     """
     global wifi_mode
     cur = already_connected_to()
-    if cur == HOME_SSID:  wifi_mode="home";   return "home"
-    if cur == SITE_SSID:  wifi_mode="client"; return "client"
+    if cur == HOME_SSID: wifi_mode="home"; return "home"
+    if cur and cur.startswith(SITE_SSID_PREFIX): wifi_mode="client"; return "client"
     if scan_for(HOME_SSID):
         if connect_to(HOME_SSID, HOME_PASSWORD): wifi_mode="home"; return "home"
 
     # No home wifi found — we're in the field. Look for an already-up
-    # PFE-NET for a while before considering hosting our own.
-    if scan_for(SITE_SSID, retries=6):
-        if connect_to(SITE_SSID, SITE_PASSWORD):
+    # PFE-NET-<n> for a while before considering hosting our own. If more
+    # than one is up, join the lowest-numbered one — everyone applies the
+    # same rule, so they all converge on the same host.
+    hosts = scan_for_site_hosts(retries=6)
+    if hosts:
+        if connect_to(f"{SITE_SSID_PREFIX}{hosts[0]}", SITE_PASSWORD):
             wifi_mode="client"; return "client"
 
     # Still nothing — wait a random beat, then check one more time.
@@ -255,11 +305,12 @@ def setup_wifi():
     # the same moment, and gives a slow-to-boot host one last chance to
     # be discovered.
     time.sleep(random.uniform(4, 12))
-    if scan_for(SITE_SSID, retries=3):
-        if connect_to(SITE_SSID, SITE_PASSWORD):
+    hosts = scan_for_site_hosts(retries=3)
+    if hosts:
+        if connect_to(f"{SITE_SSID_PREFIX}{hosts[0]}", SITE_PASSWORD):
             wifi_mode="client"; return "client"
 
-    if create_hotspot():
+    if create_hotspot(MY_SITE_SSID):
         wifi_mode="host"; return "host"
 
     wifi_mode="searching"; return "searching"
