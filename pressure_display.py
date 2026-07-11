@@ -218,6 +218,17 @@ def scan_for_site_hosts(retries=2):
     return sorted(found)
 def connect_to(ssid, password):
     try:
+        # Force a fresh scan immediately before connecting. nmcli's "dev wifi
+        # connect" looks up the target in NetworkManager's own internal AP
+        # list, built from periodic background scans — it can be stale by a
+        # few seconds, especially right after this radio was itself running
+        # as a hotspot. That staleness is what was causing "Error: No
+        # network with SSID '...' found" even though the target network was
+        # genuinely up (confirmed visible from a laptop at the same moment):
+        # the connect command was checking a cache that had never actually
+        # seen it. Rescanning right here guarantees the cache is current.
+        subprocess.run(['sudo','nmcli','dev','wifi','list','--rescan','yes'],
+                       capture_output=True, text=True, timeout=20)
         subprocess.run(['sudo','nmcli','dev','wifi','connect',ssid,'password',password],
                        check=True, timeout=30)
         time.sleep(3)
