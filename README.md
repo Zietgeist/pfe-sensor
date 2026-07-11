@@ -73,6 +73,29 @@ in range of `PFE-home`.
   device up with no `PFE-home` in range creates `PFE-NET`, everyone else
   joins it).
 
+## Safe power-off in the field
+
+Field units only have the physical PiSugar button — no SSH, no `sudo
+shutdown -now`. `setup_pfe.sh`'s install instructions configure PiSugar
+so a **long press does a clean shutdown** before power actually cuts,
+instead of a hard cutoff, and so the device **shuts itself down cleanly
+at 5% battery** instead of browning out. Both are one-time settings
+stored in PiSugar's own config, so they survive reboots. If a device
+doesn't have this set (e.g. it was built before this was added), run
+once:
+
+```
+echo -e 'set_button_enable long 1\nset_button_shell long "sudo shutdown now"' | nc -U -q1 /tmp/pisugar-server.sock
+echo -e 'set_safe_shutdown_level 5\nset_safe_shutdown_delay 30' | nc -U -q1 /tmp/pisugar-server.sock
+```
+
+This isn't a complete guarantee against SD card corruption (nothing is,
+on a device that can still lose power mid-write) — but between this and
+the fact that `update_and_run.sh`/`report_status.sh` already `git reset
+--hard` to a known-good state on every boot, a device that does get
+corrupted mid-write should self-heal on its next successful boot rather
+than staying broken.
+
 ## Known issues
 
 - **PiSugar segfaults on Zero W v1** (`pisugar-server` crash-loops with
