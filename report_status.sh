@@ -32,12 +32,13 @@ IP_ADDRESS=$(hostname -I | awk '{print $1}')
 CODE_VERSION=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 CPU_TEMP=$(vcgencmd measure_temp 2>/dev/null | grep -o '[0-9.]*' || echo "unknown")
 
-# Human-readable timestamp instead of raw ISO 8601 (e.g. "Jul 11, 2026 07:07 PM UTC"
-# instead of "2026-07-11T19:07:13Z"). Pi's default clock is UTC unless a timezone
-# was set via raspi-config, so this still reads as UTC — just easier to read at a
-# glance. If devices ever get a real local timezone set, this will follow it
-# automatically (the "UTC" label would need updating to %Z in that case).
-TIMESTAMP=$(date -u +"%b %d, %Y %I:%M %p UTC")
+# Human-readable timestamp instead of raw ISO 8601 (e.g. "Jul 11, 2026 07:07 PM MDT"
+# instead of "2026-07-11T19:07:13Z"). Uses the device's own local time and zone
+# (update_and_run.sh auto-detects and sets the real timezone from IP geolocation
+# every boot, since units can end up anywhere) — %Z prints whatever that zone's
+# abbreviation is, so this is correct wherever a device is physically located,
+# which matters for correlating pressure readings with local time of day.
+TIMESTAMP=$(date +"%b %d, %Y %I:%M %p %Z")
 
 # --- Save it into the shared registry, retry if another device is mid-save ---
 for attempt in 1 2 3 4 5; do
