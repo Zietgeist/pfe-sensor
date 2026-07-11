@@ -105,9 +105,11 @@ sudo apt update
 # report_status.sh calls i2cdetect — none of that worked without these.
 # netcat-openbsd was added so the safe-shutdown PiSugar commands below
 # (nc -U ... /tmp/pisugar-server.sock) actually work — nc isn't installed
-# by default on Raspberry Pi OS Lite.
+# by default on Raspberry Pi OS Lite. curl was added because
+# update_and_run.sh uses it every boot to auto-detect the device's local
+# timezone from IP geolocation (units can end up anywhere once sold).
 echo "[3/10] Installing dependencies..."
-sudo apt install -y git python3-pip python3-pil python3-smbus2 python3-spidev python3-libgpiod i2c-tools netcat-openbsd network-manager bluetooth bluez
+sudo apt install -y git curl python3-pip python3-pil python3-smbus2 python3-spidev python3-libgpiod i2c-tools netcat-openbsd network-manager bluetooth bluez
 
 # --- Install BLE election packages (for host self-organizing) ---
 echo "[4/10] Installing Bluetooth packages for device election..."
