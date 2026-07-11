@@ -81,8 +81,11 @@ echo "[2/9] Updating package list..."
 sudo apt update
 
 # --- Install dependencies ---
+# NOTE: python3-spidev, python3-libgpiod, and i2c-tools were added here.
+# WhisPlay.py (the screen driver) imports spidev + gpiod directly, and
+# report_status.sh calls i2cdetect — none of that worked without these.
 echo "[3/9] Installing dependencies..."
-sudo apt install -y git python3-pip python3-pil python3-smbus2 network-manager bluetooth bluez
+sudo apt install -y git python3-pip python3-pil python3-smbus2 python3-spidev python3-libgpiod i2c-tools network-manager bluetooth bluez
 
 # --- Install BLE election packages (for host self-organizing) ---
 echo "[4/9] Installing Bluetooth packages for device election..."
@@ -94,11 +97,15 @@ sudo systemctl start bluetooth
 echo "Bluetooth packages installed and service running."
 
 # --- Install Whisplay driver ---
+# NOTE: PiSugar restructured the Whisplay repo. The old path
+# (Whisplay/Driver/install_wm8960_drive.sh) no longer exists and this step
+# was silently failing. The new entry point is install_driver.sh at the repo
+# root, which auto-detects the board and installs the right driver.
 echo "[5/9] Installing Whisplay HAT driver..."
 cd /home/pi
 git clone https://github.com/PiSugar/Whisplay.git --depth 1
-cd /home/pi/Whisplay/Driver
-echo "y" | sudo bash install_wm8960_drive.sh
+cd /home/pi/Whisplay
+echo "y" | sudo bash install_driver.sh
 echo "Whisplay install done. Continuing (reboot comes at the end)..."
 
 # --- Enable I2C and SPI ---
