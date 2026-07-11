@@ -32,13 +32,20 @@ Every boot, each `PFE-X` unit automatically:
 1. Connects to `PFE-home` WiFi if it's in range (normal at-base operation).
 2. Pulls the latest code from this repo's `main` branch
    (`update_and_run.sh`).
-3. Checks itself into the shared `device_registry.json` on GitHub with its
-   hardware info, IP, and current code version (`report_status.sh`).
-4. Starts the sensor app (`pressure_display.py`).
+3. Auto-detects and sets its own local timezone from IP geolocation
+   (`update_and_run.sh`) — units get sold and deployed anywhere, and
+   pressure readings need to line up with local time of day (furnace
+   cycles, people coming/going, etc.) for data logging to make sense.
+   Only touches the clock if the detected zone is different from what's
+   already set.
+4. Checks itself into the shared `device_registry.json` on GitHub with its
+   hardware info, IP, current code version, and a local timestamp
+   (`report_status.sh`).
+5. Starts the sensor app (`pressure_display.py`).
 
 This is fully automatic — there's no manual "update" step for a deployed
 device. If a device hasn't shown up in `device_registry.json` recently,
-that means step 2 or 3 is failing (usually a DNS/networking timing issue
+that means step 2 or 4 is failing (usually a DNS/networking timing issue
 at boot — see `update_and_run.sh` for the current handling of that), not
 that it needs to be reflashed.
 
