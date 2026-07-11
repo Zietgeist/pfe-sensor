@@ -2,9 +2,9 @@
 
 Sensor unit for measuring pressure field extension (PFE) under a concrete slab —
 used to diagnose and design radon mitigation systems. Multiple units form a
-mesh: one device hosts a WiFi network (`PFE-NET`) in the field, the rest
-connect to it as clients and report their readings to the host, which serves
-a live dashboard.
+mesh: one device hosts a WiFi network (`PFE-NET-<n>`, numbered after itself)
+in the field, the rest connect to it as clients and report their readings to
+the host, which serves a live dashboard.
 
 ## About this project (read before helping)
 
@@ -43,9 +43,20 @@ at boot — see `update_and_run.sh` for the current handling of that), not
 that it needs to be reflashed.
 
 If a device is out in the field with no `PFE-home` in range, it either
-hosts or joins `PFE-NET` instead (see `setup_wifi()` in
+hosts or joins a site network instead (see `setup_wifi()` in
 `pressure_display.py`) and won't pull updates or check in until it's back
 in range of `PFE-home`.
+
+Each device that ends up hosting in the field uses its own uniquely
+numbered network name — `PFE-NET-1`, `PFE-NET-4`, etc., from its device
+number — instead of every device broadcasting the identical name
+`PFE-NET`. That used to make it impossible for a client device (or
+`nmcli`) to tell "the real host" apart from another device that also
+ended up self-hosting, causing connects to fail outright or land on the
+wrong one at random. A device looking to join scans for any `PFE-NET-<n>`
+in range and always joins the **lowest-numbered** one it finds — every
+device applies the same rule, so they converge on the same host even if
+two happen to start hosting at the same time.
 
 ## Hardware
 
@@ -69,9 +80,10 @@ in range of `PFE-home`.
 - **Power:** PiSugar battery pack (PiSugar 3), managed by `pisugar-server`.
 - **Networking:** onboard WiFi only. No Bluetooth-based device coordination
   currently in use (see `ble_election.py` — present in the repo but not
-  wired in; devices currently self-organize by boot order instead: first
-  device up with no `PFE-home` in range creates `PFE-NET`, everyone else
-  joins it).
+  wired in; devices currently self-organize by boot order instead: each
+  device with no `PFE-home` in range either finds an already-up
+  `PFE-NET-<n>` and joins the lowest-numbered one, or hosts its own
+  uniquely numbered `PFE-NET-<its own number>` if none are found).
 
 ## Safe power-off in the field
 
