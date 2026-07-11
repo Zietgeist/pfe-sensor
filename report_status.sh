@@ -32,7 +32,12 @@ IP_ADDRESS=$(hostname -I | awk '{print $1}')
 CODE_VERSION=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 CPU_TEMP=$(vcgencmd measure_temp 2>/dev/null | grep -o '[0-9.]*' || echo "unknown")
 
-TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# Human-readable timestamp instead of raw ISO 8601 (e.g. "Jul 11, 2026 07:07 PM UTC"
+# instead of "2026-07-11T19:07:13Z"). Pi's default clock is UTC unless a timezone
+# was set via raspi-config, so this still reads as UTC — just easier to read at a
+# glance. If devices ever get a real local timezone set, this will follow it
+# automatically (the "UTC" label would need updating to %Z in that case).
+TIMESTAMP=$(date -u +"%b %d, %Y %I:%M %p UTC")
 
 # --- Save it into the shared registry, retry if another device is mid-save ---
 for attempt in 1 2 3 4 5; do
