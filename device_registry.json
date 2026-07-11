@@ -58,5 +58,20 @@
     "sd_card_size": "57G",
     "sensor_1": "no",
     "sensor_2": "no"
+  },
+  "PFE-6": {
+    "bluetooth": "yes",
+    "code_version": "9c6909d",
+    "cpu_temp_c": "49.4",
+    "disk_used_percent": "18%",
+    "has_battery": "yes",
+    "has_screen": "yes",
+    "ip_address": "192.168.0.21",
+    "last_seen": "2026-07-11T18:12:07Z",
+    "mux_present": "no",
+    "rpi_model": "Raspberry Pi Zero 2 W Rev 1.0",
+    "sd_card_size": "29G",
+    "sensor_1": "yes",
+    "sensor_2": "yes"
   }
 }
