@@ -28,8 +28,16 @@ read -p "Enter GitHub PAT (for auto-updates and numbering): " GITHUB_PAT
 echo ""
 
 # --- Set up git identity (needed to commit) ---
-git config --global user.email "pfe-device@local"
-git config --global user.name "PFE Device"
+# NOTE: --system (not --global) so this applies to every user on the
+# device, not just "pi". pfe-sensor.service and report_status.sh run as
+# root, which has its own separate git config — --global here would only
+# have covered "pi" and left root unable to ever actually commit (it
+# could stage and push, but "git commit" would silently fail with "please
+# tell me who you are", so registry check-ins looked successful but never
+# landed). update_and_run.sh also re-applies this every boot as a
+# self-healing backstop.
+sudo git config --system user.email "pfe-device@local"
+sudo git config --system user.name "PFE Device"
 git config --global credential.helper store
 echo "https://Zietgeist:${GITHUB_PAT}@github.com" | sudo tee /root/.git-credentials > /dev/null
 echo "https://Zietgeist:${GITHUB_PAT}@github.com" > /home/pi/.git-credentials
