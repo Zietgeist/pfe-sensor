@@ -227,6 +227,15 @@ def setup_wifi():
          - If not, stand up PFE-NET ourselves as the host.
       Boot devices a few seconds apart in the field so the first one
       to reach this point claims the host role before the others scan.
+
+      Devices don't all boot at the same speed (a Pi Zero W v1's single
+      ARMv6 core takes noticeably longer to get through boot/git-pull/
+      sensor-init than a Zero 2 W's quad-core), so a slower device can
+      reach this point before a faster one has actually stood its
+      hotspot up yet, and mistakenly host its own instead of waiting.
+      This scans longer and adds a small random pause before giving up,
+      so slower devices get more of a chance to find an already-up
+      PFE-NET, and devices don't all give up in the same instant.
     """
     global wifi_mode
     cur = already_connected_to()
@@ -235,8 +244,18 @@ def setup_wifi():
     if scan_for(HOME_SSID):
         if connect_to(HOME_SSID, HOME_PASSWORD): wifi_mode="home"; return "home"
 
-    # No home wifi found — we're in the field.
-    if scan_for(SITE_SSID, retries=2):
+    # No home wifi found — we're in the field. Look for an already-up
+    # PFE-NET for a while before considering hosting our own.
+    if scan_for(SITE_SSID, retries=6):
+        if connect_to(SITE_SSID, SITE_PASSWORD):
+            wifi_mode="client"; return "client"
+
+    # Still nothing — wait a random beat, then check one more time.
+    # This spreads devices out so they don't all decide to self-host at
+    # the same moment, and gives a slow-to-boot host one last chance to
+    # be discovered.
+    time.sleep(random.uniform(4, 12))
+    if scan_for(SITE_SSID, retries=3):
         if connect_to(SITE_SSID, SITE_PASSWORD):
             wifi_mode="client"; return "client"
 
