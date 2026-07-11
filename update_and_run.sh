@@ -11,6 +11,17 @@ echo "Boot: $(date)" >> "$LOG"
 chown -R pi:pi "$REPO_DIR"
 git config --global --add safe.directory "$REPO_DIR" >> "$LOG" 2>&1
 
+# This whole script runs as root, but setup_pfe.sh only ever configured
+# git identity for the "pi" user (git config --global there writes to
+# /home/pi/.gitconfig, not root's). That left root able to stage and push
+# but never actually commit — report_status.sh's "git commit" was failing
+# silently every boot, and the follow-up "git push" trivially "succeeded"
+# with nothing new to send, so devices looked like they were checking in
+# when they never actually were. Setting it here, every boot, self-heals
+# any device that still has the old setup.
+git config --global user.email "pfe-device@local" >> "$LOG" 2>&1
+git config --global user.name "PFE Device" >> "$LOG" 2>&1
+
 if [ ! -d "$REPO_DIR" ]; then
     git clone "$REPO_URL" "$REPO_DIR" >> "$LOG" 2>&1 || echo "Clone failed, continuing" >> "$LOG"
 fi
