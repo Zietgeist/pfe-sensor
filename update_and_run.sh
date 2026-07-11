@@ -26,14 +26,18 @@ if [ ! -d "$REPO_DIR" ]; then
     git clone "$REPO_URL" "$REPO_DIR" >> "$LOG" 2>&1 || echo "Clone failed, continuing" >> "$LOG"
 fi
 
-# Clear stale hotspot/PFE-NET connection profiles every boot.
-# These get created automatically when a device hosts or joins PFE-NET
-# in the field (nmcli names the auto-created hotspot profile "Hotspot").
-# Left in place, they can distract NetworkManager on the next boot and
-# delay it settling on the real home WiFi network, which delays DNS
-# coming up — which was silently breaking the GitHub check-in below.
+# Clear stale hotspot/site connection profiles every boot.
+# These get created automatically when a device hosts or joins a site
+# network in the field (nmcli names the auto-created hotspot profile
+# "Hotspot"; each device's own site network is now named "PFE-NET-<n>",
+# not a single shared "PFE-NET" — see pressure_display.py). Left in
+# place, they can distract NetworkManager on the next boot and delay it
+# settling on the real home WiFi network, which delays DNS coming up —
+# which was silently breaking the GitHub check-in below.
 nmcli connection delete Hotspot >> "$LOG" 2>&1
-nmcli connection delete PFE-NET >> "$LOG" 2>&1
+for conn in $(nmcli -t -f NAME connection show 2>/dev/null | grep '^PFE-NET-'); do
+    nmcli connection delete "$conn" >> "$LOG" 2>&1
+done
 
 # Wait for internet — check actual DNS resolution, not just raw IP
 # reachability. A ping to 8.8.8.8 can succeed before DNS is working yet,
@@ -44,6 +48,35 @@ for i in $(seq 1 30); do
     echo "Waiting for DNS... ($i)" >> "$LOG"
     sleep 2
 done
+
+# Auto-detect and set the system timezone from IP geolocation, every boot.
+# Units get sold and shipped to customers anywhere — a Pi's clock defaults
+# to UTC and stays there forever unless something sets it. Data logging
+# needs local time of day (furnace cycles, people coming/going, etc.), not
+# a fixed zone, so this keeps whatever zone the device is physically in,
+# automatically, with no manual step. Only actually touches the clock if
+# the detected zone differs from what's already set, so this is a no-op
+# almost every boot. If there's no real internet right now (e.g. the
+# device is off hosting its own PFE-NET-<n> in the field), both lookups
+# just time out quickly and the existing timezone is left alone.
+DETECTED_TZ=$(curl -s --max-time 8 https://ipapi.co/timezone)
+if [ -z "$DETECTED_TZ" ] || [[ "$DETECTED_TZ" == *"error"* ]] || [[ "$DETECTED_TZ" == *"<"* ]]; then
+    DETECTED_TZ=$(curl -s --max-time 8 http://worldtimeapi.org/api/ip | grep -o '"timezone":"[^"]*"' | cut -d'"' -f4)
+fi
+if [ -n "$DETECTED_TZ" ]; then
+    CURRENT_TZ=$(timedatectl show --property=Timezone --value)
+    if [ "$DETECTED_TZ" != "$CURRENT_TZ" ]; then
+        if timedatectl set-timezone "$DETECTED_TZ" >> "$LOG" 2>&1; then
+            echo "Timezone updated: $CURRENT_TZ -> $DETECTED_TZ" >> "$LOG"
+        else
+            echo "Timezone update to $DETECTED_TZ failed, keeping $CURRENT_TZ" >> "$LOG"
+        fi
+    else
+        echo "Timezone already correct: $CURRENT_TZ" >> "$LOG"
+    fi
+else
+    echo "Timezone detection failed (no internet or API down), keeping $(timedatectl show --property=Timezone --value)" >> "$LOG"
+fi
 
 cd "$REPO_DIR"
 git fetch origin main >> "$LOG" 2>&1 || echo "Fetch failed, continuing" >> "$LOG"
