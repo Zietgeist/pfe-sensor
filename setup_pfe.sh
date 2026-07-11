@@ -6,6 +6,17 @@
 # INSTALL COMMAND:
 #   curl -sSL https://raw.githubusercontent.com/Zietgeist/pfe-sensor/main/setup_pfe.sh -o setup_pfe.sh && bash setup_pfe.sh
 #
+# PROJECT NOTES (see README.md for the full version):
+#   - Built by Ivan, who has limited programming experience. If you're
+#     editing this script, keep every step as a literal command that can
+#     be copy-pasted and run — don't assume familiarity with git/linux.
+#   - Whenever this script changes, update README.md in the same pass so
+#     the docs and the actual install process don't drift apart.
+#   - Target hardware is the Raspberry Pi Zero family generally (Zero W,
+#     Zero 2 W, etc.) — this script should stay board-version agnostic.
+#     Known gap: the PiSugar driver install below currently segfaults on
+#     Zero W v1 (works fine on Zero 2 W) — see README.md Known Issues.
+#
 # Don't abort on error — let it log and continue
 set +e
 
