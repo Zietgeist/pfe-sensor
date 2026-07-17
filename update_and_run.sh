@@ -27,17 +27,18 @@ if [ ! -d "$REPO_DIR" ]; then
 fi
 
 # Clear stale hotspot/site connection profiles every boot.
-# These get created automatically when a device hosts or joins a site
-# network in the field (nmcli names the auto-created hotspot profile
-# "Hotspot"; each device's own site network is now named "PFE-NET-<n>",
-# not a single shared "PFE-NET" — see pressure_display.py). Left in
-# place, they can distract NetworkManager on the next boot and delay it
+# These get created automatically when a device hosts or joins PFE-NET in
+# the field (nmcli names the auto-created hotspot profile "Hotspot"; the
+# client-side join profile is "site-PFE-NET" — see connect_to() in
+# pressure_display.py). Who hosts is now a manual button decision at boot
+# (see "host_or_join" in pressure_display.py), so it's back to one shared
+# network name instead of a per-device numbered one. Left in place, stale
+# profiles can distract NetworkManager on the next boot and delay it
 # settling on the real home WiFi network, which delays DNS coming up —
 # which was silently breaking the GitHub check-in below.
 nmcli connection delete Hotspot >> "$LOG" 2>&1
-for conn in $(nmcli -t -f NAME connection show 2>/dev/null | grep '^PFE-NET-'); do
-    nmcli connection delete "$conn" >> "$LOG" 2>&1
-done
+nmcli connection delete PFE-NET >> "$LOG" 2>&1
+nmcli connection delete site-PFE-NET >> "$LOG" 2>&1
 
 # Wait for internet — check actual DNS resolution, not just raw IP
 # reachability. A ping to 8.8.8.8 can succeed before DNS is working yet,
@@ -57,7 +58,7 @@ done
 # automatically, with no manual step. Only actually touches the clock if
 # the detected zone differs from what's already set, so this is a no-op
 # almost every boot. If there's no real internet right now (e.g. the
-# device is off hosting its own PFE-NET-<n> in the field), both lookups
+# device is off hosting or joining PFE-NET in the field), both lookups
 # just time out quickly and the existing timezone is left alone.
 DETECTED_TZ=$(curl -s --max-time 8 https://ipapi.co/timezone)
 if [ -z "$DETECTED_TZ" ] || [[ "$DETECTED_TZ" == *"error"* ]] || [[ "$DETECTED_TZ" == *"<"* ]]; then

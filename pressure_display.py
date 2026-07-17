@@ -9,8 +9,10 @@ Boot sequence:
        4 clicks → 14 to 32F   5 clicks → >32F
   3. Pick climate zone (clicks + 3s timeout, default = Severe)
        1 click → Mild   2 clicks → Moderate   3 clicks → Severe
-  4. Press to lock baseline → targets calculated automatically
-  5. Running: short press = capture suction snapshot
+  4. Host or join PFE-NET (first boot only — skipped on setup re-entry)
+       long press → host PFE-NET   short press → join PFE-NET
+  5. Press to lock baseline → targets calculated automatically
+  6. Running: short press = capture suction snapshot
               long hold   = re-enter setup
 Hardware auto-detection at boot:
   No MUX → 2 sensors: S1 at 0x25, S2 at 0x26  (original wiring)
@@ -28,12 +30,6 @@ from WhisPlay import WhisPlayBoard
 # Constants
 # =============================================================
 DEVICE_NAME   = os.uname().nodename
-def own_device_num():
-    """Pull the trailing number off DEVICE_NAME, e.g. 'PFE-4' -> 4. If the
-    hostname doesn't follow the PFE-<n> pattern for some reason, fall back
-    to a very high number so this device never wins a lowest-number tie-break."""
-    m = re.search(r'(\d+)$', DEVICE_NAME)
-    return int(m.group(1)) if m else 999
 SDP_ADDR_1    = 0x25   # S1: direct or MUX ch0 — this is an SDP810 (fixed addr 0x25)
 SDP_ADDR_2    = 0x26   # S2: direct only (no MUX; all MUX sensors use 0x25) — SDP811 (fixed addr 0x26)
 # SDP810/SDP811 are used as a pair specifically because their I2C addresses
@@ -44,16 +40,17 @@ MUX_ADDR      = 0x70   # TCA9548A / PCA9548A
 MUX_CHANNELS  = [0, 1, 2, 3]
 HOME_SSID     = "PFE-home"
 HOME_PASSWORD = "pferadon1"
-# Each device hosts its OWN uniquely-numbered network in the field
-# (PFE-NET-1, PFE-NET-4, etc.) instead of every device broadcasting the
-# identical name "PFE-NET". Sharing one name across multiple hosts made
-# it impossible for nmcli (or a client device) to tell "the real host"
-# apart from another device that also ended up self-hosting — connects
-# would fail outright or land on the wrong one at random. See
-# own_device_num() / MY_SITE_SSID below.
-SITE_SSID_PREFIX = "PFE-NET-"
+# Who hosts PFE-NET is a manual, human decision made with the physical
+# button at boot (see the "host_or_join" boot stage below) — not something
+# devices try to silently self-negotiate over WiFi or BLE. That
+# self-negotiating approach (numbered PFE-NET-<n> networks, scan-and-elect-
+# lowest-number, then a BLE election as a backup) kept failing in real
+# field tests: scans that missed a genuinely-up host, BLE that never
+# reliably worked, races between devices booting at different speeds. A
+# person is standing right there setting up the mesh anyway, so one button
+# press settles it instantly with no ambiguity. Back to one shared name.
+SITE_SSID     = "PFE-NET"
 SITE_PASSWORD = "pferadon1"
-MY_SITE_SSID  = f"{SITE_SSID_PREFIX}{own_device_num()}"  # this device's own hosted network name, if it ends up hosting
 HOST_IP       = "10.42.0.1"
 WEB_PORT      = 80
 ZONE_MILD     = "mild"
@@ -122,7 +119,7 @@ zero_offset3      = 0.0
 zero_offset4      = 0.0
 # Hardware config — set once at boot by detect_hardware()
 has_mux = False   # True = MUX found; False = direct 0x25/0x26 wiring
-# boot stages: zeroing | pick_temp | pick_zone | lock_baseline | running
+# boot stages: zeroing | pick_temp | pick_zone | host_or_join | lock_baseline | running
 boot_stage       = "zeroing"
 temp_clicks      = 0
 temp_band_choice = None
@@ -138,6 +135,8 @@ target2          = None
 target3          = None
 target4          = None
 wifi_mode        = "searching"
+wifi_status      = "Checking PFE-home for update"   # shown on screen during host_or_join stage
+wifi_choice      = None   # set by button_up() at the host_or_join stage: "host" or "join"
 sensor_data      = {}
 active           = True
 current_battery  = None
@@ -192,30 +191,6 @@ def scan_for(ssid, retries=2):
             print(f"Scan error: {e}")
         time.sleep(2)
     return False
-def scan_for_site_hosts(retries=2):
-    """
-    Look for any PFE-NET-<n> network currently in range (i.e. any device
-    that's already hosting), excluding our own number. Returns a sorted
-    list of the device numbers found — hosts[0], if any, is the one we
-    should join, since "lowest number wins" is our tie-breaker.
-    """
-    found = set()
-    for _ in range(retries):
-        try:
-            r = subprocess.run(['sudo','nmcli','-t','-f','SSID','dev','wifi','list','--rescan','yes'],
-                               capture_output=True, text=True, timeout=20)
-            for line in r.stdout.splitlines():
-                line = line.strip()
-                if line.startswith(SITE_SSID_PREFIX):
-                    tail = line[len(SITE_SSID_PREFIX):]
-                    if tail.isdigit() and int(tail) != own_device_num():
-                        found.add(int(tail))
-        except Exception as e:
-            print(f"Scan error: {e}")
-        if found:
-            return sorted(found)
-        time.sleep(2)
-    return sorted(found)
 def connect_to(ssid, password):
     try:
         # Force a fresh scan immediately before connecting. nmcli's "dev wifi
@@ -265,6 +240,15 @@ def create_hotspot(ssid):
         return True
     except Exception as e:
         print(f"Hotspot error: {e}"); return False
+def disconnect_wifi():
+    """Drop whatever WiFi connection is currently active on wlan0. Used
+    right after the home-wifi update check — home wifi is only needed
+    transiently to pull code / check in, not for ongoing operation."""
+    try:
+        subprocess.run(['sudo','nmcli','device','disconnect','wlan0'],
+                       capture_output=True, text=True, timeout=15)
+    except Exception as e:
+        print(f"Disconnect error: {e}")
 def get_own_ip():
     try:
         r = subprocess.run(['ip','-4','addr','show','wlan0'], capture_output=True, text=True)
@@ -286,64 +270,71 @@ def already_connected_to():
     return None
 def setup_wifi():
     """
-    Decide how this device gets on the network:
-      1. Already connected to home or a PFE site network? Keep it.
-      2. Home wifi in range? Connect to it (in-shop testing).
-      3. Otherwise we're in the field — no BLE election for now:
-         - Each device hosts its OWN uniquely-numbered network if it
-           ends up hosting (PFE-NET-<n>, from its device number), not a
-           shared name. Every device broadcasting the identical name
-           "PFE-NET" made it impossible for nmcli (or us) to tell "the
-           real host" apart from another device that also ended up
-           self-hosting — connect attempts failed outright or landed on
-           the wrong one at random. See own_device_num()/MY_SITE_SSID.
-         - If one or more PFE-NET-<n> networks are already up, join the
-           LOWEST-numbered one. Every device applies the same rule, so
-           even if two devices briefly host at once, everyone converges
-           on the same one.
-         - If none exist, stand up our own PFE-NET-<our number>.
-      Boot devices a few seconds apart in the field so the first one
-      to reach this point claims the host role before the others scan.
-
-      Devices don't all boot at the same speed (a Pi Zero W v1's single
-      ARMv6 core takes noticeably longer to get through boot/git-pull/
-      sensor-init than a Zero 2 W's quad-core), so a slower device can
-      reach this point before a faster one has actually stood its
-      hotspot up yet, and mistakenly host its own instead of waiting.
-      This scans longer and adds a small random pause before giving up,
-      so slower devices get more of a chance to find an already-up
-      host, and devices don't all give up in the same instant.
+    Runs in its own background thread (see wifi_and_serve()), in parallel
+    with the button-driven boot sequence on the main thread:
+      1. Check for PFE-home and connect briefly if it's in range, so the
+         device can pull code / check in — this doesn't need the user to
+         do anything. Then disconnect; home wifi isn't used for ongoing
+         operation, only for that check.
+      2. Wait for the main thread's boot sequence to reach the
+         "host_or_join" stage and for the user to make a decision with
+         the physical button:
+             long press  = host PFE-NET
+             short press = join PFE-NET
+         This replaced an earlier design where devices tried to silently
+         self-negotiate who hosts (numbered PFE-NET-<n> networks, scan
+         and elect the lowest number, then later a BLE election as a
+         backup). Both kept failing in real field tests — scans that
+         missed a genuinely-up host, BLE that never reliably worked,
+         races between devices booting at different speeds. A person is
+         standing right there setting up the mesh anyway, so one button
+         press settles it instantly with no ambiguity.
+      3. Act on that decision. If joining fails (host not actually up, or
+         out of range), say so on screen and let the user try again —
+         either re-press short to rescan, or press long to just host
+         instead — rather than getting stuck.
     """
-    global wifi_mode
+    global wifi_mode, wifi_status, wifi_choice, boot_stage
+    with lock: wifi_status = "Checking PFE-home for update"
     cur = already_connected_to()
-    if cur == HOME_SSID: wifi_mode="home"; return "home"
-    if cur and cur.startswith(SITE_SSID_PREFIX): wifi_mode="client"; return "client"
-    if scan_for(HOME_SSID):
-        if connect_to(HOME_SSID, HOME_PASSWORD): wifi_mode="home"; return "home"
+    if cur == HOME_SSID or scan_for(HOME_SSID):
+        if cur != HOME_SSID:
+            connect_to(HOME_SSID, HOME_PASSWORD)
+        time.sleep(2)
+        disconnect_wifi()
+    with lock: wifi_status = "Waiting for user"
 
-    # No home wifi found — we're in the field. Look for an already-up
-    # PFE-NET-<n> for a while before considering hosting our own. If more
-    # than one is up, join the lowest-numbered one — everyone applies the
-    # same rule, so they all converge on the same host.
-    hosts = scan_for_site_hosts(retries=6)
-    if hosts:
-        if connect_to(f"{SITE_SSID_PREFIX}{hosts[0]}", SITE_PASSWORD):
-            wifi_mode="client"; return "client"
+    while True:
+        with lock:
+            stage  = boot_stage
+            choice = wifi_choice
+        if stage != "host_or_join" or choice is None:
+            time.sleep(0.2)
+            continue
 
-    # Still nothing — wait a random beat, then check one more time.
-    # This spreads devices out so they don't all decide to self-host at
-    # the same moment, and gives a slow-to-boot host one last chance to
-    # be discovered.
-    time.sleep(random.uniform(4, 12))
-    hosts = scan_for_site_hosts(retries=3)
-    if hosts:
-        if connect_to(f"{SITE_SSID_PREFIX}{hosts[0]}", SITE_PASSWORD):
-            wifi_mode="client"; return "client"
+        if choice == "host":
+            with lock: wifi_status = "Hosting PFE-NET"
+            if create_hotspot(SITE_SSID):
+                with lock:
+                    wifi_mode  = "host"
+                    boot_stage = "lock_baseline"
+                return "host"
+            with lock:
+                wifi_status = "Hosting failed — try again"
+                wifi_choice = None
+            time.sleep(2)
+            continue
 
-    if create_hotspot(MY_SITE_SSID):
-        wifi_mode="host"; return "host"
-
-    wifi_mode="searching"; return "searching"
+        # choice == "join"
+        with lock: wifi_status = "Searching for PFE-NET"
+        if scan_for(SITE_SSID, retries=6) and connect_to(SITE_SSID, SITE_PASSWORD):
+            with lock:
+                wifi_mode  = "client"
+                boot_stage = "lock_baseline"
+            return "client"
+        with lock:
+            wifi_status = "PFE-NET not found. Host or move closer."
+            wifi_choice = None
 # =============================================================
 # Sensor — hardware detection + reading
 # =============================================================
@@ -459,7 +450,7 @@ def _zone_default_accept():
     global boot_stage, _zone_click_timer
     with lock:
         if boot_stage != "pick_zone": return
-        boot_stage = "lock_baseline"
+        boot_stage = "lock_baseline" if wifi_mode in ("host","client") else "host_or_join"
         _zone_click_timer = None
     print(f"Zone defaulted: {climate_zone}")
 def _temp_timeout():
@@ -488,7 +479,7 @@ def _zone_timeout():
     global boot_stage, _zone_click_timer
     with lock:
         if boot_stage == "pick_zone":
-            boot_stage = "lock_baseline"
+            boot_stage = "lock_baseline" if wifi_mode in ("host","client") else "host_or_join"
             _zone_click_timer = None
     print(f"Zone set: {climate_zone}")
 def advance_boot_stage():
@@ -570,12 +561,17 @@ def button_down():
     global _button_press_time
     _button_press_time = time.time()
 def button_up():
-    global active, _button_press_time
+    global active, _button_press_time, wifi_choice
     if _button_press_time is None: return
     held = time.time() - _button_press_time
     _button_press_time = None
     with lock:
         stage = boot_stage
+    if stage == "host_or_join":
+        with lock:
+            wifi_choice = "host" if held >= HOLD_SECONDS else "join"
+        print(f"Host/Join: {'HOST (long press)' if wifi_choice=='host' else 'JOIN (short press)'}")
+        return
     if held >= HOLD_SECONDS:
         if stage == "running": re_enter_setup()
         return
@@ -1037,6 +1033,18 @@ def image_to_pixels(img):
 def _font(size, bold=False):
     try: return ImageFont.truetype(FONT_BOLD if bold else FONT_REG, size)
     except Exception: return ImageFont.load_default()
+def _wrap2(text, maxlen=24):
+    """Best-effort 2-line wrap for status text on the small screen."""
+    if len(text) <= maxlen:
+        return text, ""
+    words = text.split(' ')
+    line1 = ""
+    for w in words:
+        if len(line1) + len(w) + 1 > maxlen:
+            break
+        line1 = (line1 + " " + w).strip()
+    line2 = text[len(line1):].strip()
+    return line1, line2
 def make_screen_boot(stage, temp_c):
     img=Image.new('RGB',(240,280),(0,0,0)); draw=ImageDraw.Draw(img)
     f_big=_font(34,True); f_med=_font(18,True); f_small=_font(14,False); f_tiny=_font(12,False)
@@ -1079,6 +1087,14 @@ def make_screen_boot(stage, temp_c):
             draw.text((6,210),"Wait 3s to confirm",font=f_tiny,fill=(180,180,80))
         with lock: tbc=temp_band_choice
         if tbc: draw.text((6,254),f"Temp: {TEMP_BAND_LABELS.get(tbc,'?')}",font=f_tiny,fill=(80,80,160))
+    elif stage=="host_or_join":
+        with lock: status=wifi_status
+        draw.text((6,32),"Network setup",font=f_med,fill=(200,200,255))
+        l1,l2=_wrap2(status,26)
+        draw.text((6,80),l1,font=f_small,fill=(100,220,255))
+        if l2: draw.text((6,100),l2,font=f_small,fill=(100,220,255))
+        draw.text((6,170),"LONG press  = Host",font=f_tiny,fill=(150,150,150))
+        draw.text((6,190),"SHORT press = Join",font=f_tiny,fill=(150,150,150))
     elif stage=="lock_baseline":
         draw.text((6,32),"Ready to lock",font=f_med,fill=(200,200,255))
         draw.text((6,58),"baseline pressure",font=f_med,fill=(200,200,255))
@@ -1164,12 +1180,13 @@ def screen_thread(board, mux_present):
             tg1=target1; tg2=target2; tg3=target3; tg4=target4
             mode=wifi_mode; stage=boot_stage
             tc=temp_clicks; zc=zone_clicks; tbc=temp_band_choice; z=climate_zone
+            wstat=wifi_status
         current=(stage,
                  round(p1,2) if p1 is not None else None,
                  round(p2,2) if p2 is not None else None,
                  round(p3,2) if p3 is not None else None,
                  round(p4,2) if p4 is not None else None,
-                 tg1,tg2,tg3,tg4,mode,tc,zc,tbc,z)
+                 tg1,tg2,tg3,tg4,mode,tc,zc,tbc,z,wstat)
         if current!=last:
             if stage=="running":
                 screen_data=make_screen_running(p1,p2,p3,p4,t1,tg1,tg2,tg3,tg4,mode,mux_present)

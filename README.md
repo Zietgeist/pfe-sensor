@@ -2,9 +2,10 @@
 
 Sensor unit for measuring pressure field extension (PFE) under a concrete slab —
 used to diagnose and design radon mitigation systems. Multiple units form a
-mesh: one device hosts a WiFi network (`PFE-NET-<n>`, numbered after itself)
-in the field, the rest connect to it as clients and report their readings to
-the host, which serves a live dashboard.
+mesh: one device hosts a WiFi network (`PFE-NET`) in the field, the rest
+connect to it as clients and report their readings to the host, which serves
+a live dashboard. Which device hosts is a manual decision made with the
+physical button at boot — not something devices negotiate automatically.
 
 ## About this project (read before helping)
 
@@ -29,41 +30,42 @@ If you're an AI assistant or another developer picking this up:
 
 Every boot, each `PFE-X` unit automatically:
 
-1. Connects to `PFE-home` WiFi if it's in range (normal at-base operation).
-2. Pulls the latest code from this repo's `main` branch
-   (`update_and_run.sh`).
-3. Auto-detects and sets its own local timezone from IP geolocation
+1. Checks for `PFE-home` WiFi and connects briefly if it's in range, to
+   pull the latest code from this repo's `main` branch
+   (`update_and_run.sh`) and check itself into the shared
+   `device_registry.json` on GitHub with its hardware info, IP, current
+   code version, and a local timestamp (`report_status.sh`). Then
+   disconnects — home wifi is only used for this, not ongoing operation.
+2. Auto-detects and sets its own local timezone from IP geolocation
    (`update_and_run.sh`) — units get sold and deployed anywhere, and
    pressure readings need to line up with local time of day (furnace
    cycles, people coming/going, etc.) for data logging to make sense.
    Only touches the clock if the detected zone is different from what's
    already set.
-4. Checks itself into the shared `device_registry.json` on GitHub with its
-   hardware info, IP, current code version, and a local timestamp
-   (`report_status.sh`).
-5. Starts the sensor app (`pressure_display.py`).
+3. Pauses on a "Host or Join PFE-NET?" screen partway through the boot
+   sequence and waits for a physical button press: **long press = host,
+   short press = join** (see `setup_wifi()` in `pressure_display.py`).
+   Only asked once per boot — re-entering setup afterward (long-hold from
+   the running screen) skips straight back to the temp/zone/baseline
+   steps without asking again.
+4. Starts the sensor app / dashboard once the network decision is made.
 
-This is fully automatic — there's no manual "update" step for a deployed
-device. If a device hasn't shown up in `device_registry.json` recently,
-that means step 2 or 4 is failing (usually a DNS/networking timing issue
-at boot — see `update_and_run.sh` for the current handling of that), not
-that it needs to be reflashed.
+This is fully automatic up through step 2 — there's no manual "update"
+step for a deployed device. If a device hasn't shown up in
+`device_registry.json` recently, that means step 1 is failing (usually a
+DNS/networking timing issue at boot — see `update_and_run.sh` for the
+current handling of that), not that it needs to be reflashed.
 
-If a device is out in the field with no `PFE-home` in range, it either
-hosts or joins a site network instead (see `setup_wifi()` in
-`pressure_display.py`) and won't pull updates or check in until it's back
-in range of `PFE-home`.
-
-Each device that ends up hosting in the field uses its own uniquely
-numbered network name — `PFE-NET-1`, `PFE-NET-4`, etc., from its device
-number — instead of every device broadcasting the identical name
-`PFE-NET`. That used to make it impossible for a client device (or
-`nmcli`) to tell "the real host" apart from another device that also
-ended up self-hosting, causing connects to fail outright or land on the
-wrong one at random. A device looking to join scans for any `PFE-NET-<n>`
-in range and always joins the **lowest-numbered** one it finds — every
-device applies the same rule, so they converge on the same host even if
-two happen to start hosting at the same time.
+Who hosts `PFE-NET` is a manual, human decision made with the physical
+button at boot, not something devices try to silently self-negotiate.
+Earlier versions tried to auto-elect a host — first by having every device
+broadcast a uniquely-numbered network (`PFE-NET-<n>`) and having others
+scan and join the lowest number found, later by a Bluetooth election
+(`ble_election.py`) — but both kept failing in real field tests: scans
+that missed a genuinely-up host, BLE that never reliably worked, races
+between devices booting at different speeds. Since a person is standing
+right there setting up the mesh anyway, one button press settles it
+instantly with no ambiguity, and it's back to one shared network name.
 
 ## Hardware
 
@@ -85,12 +87,11 @@ two happen to start hosting at the same time.
   `pressure_display.py`.
 - **Screen:** PiSugar Whisplay HAT (SPI display, RGB LED, physical button).
 - **Power:** PiSugar battery pack (PiSugar 3), managed by `pisugar-server`.
-- **Networking:** onboard WiFi only. No Bluetooth-based device coordination
-  currently in use (see `ble_election.py` — present in the repo but not
-  wired in; devices currently self-organize by boot order instead: each
-  device with no `PFE-home` in range either finds an already-up
-  `PFE-NET-<n>` and joins the lowest-numbered one, or hosts its own
-  uniquely numbered `PFE-NET-<its own number>` if none are found).
+- **Networking:** onboard WiFi only. Who hosts `PFE-NET` in the field is a
+  manual button decision at boot (see "How devices stay current" above),
+  not automatic — no Bluetooth-based coordination is in use (see
+  `ble_election.py` — present in the repo but not wired in; an earlier
+  auto-election approach that didn't prove reliable).
 
 ## Safe power-off in the field
 
