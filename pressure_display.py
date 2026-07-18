@@ -57,7 +57,7 @@ ZONE_MILD     = "mild"
 ZONE_MODERATE = "moderate"
 ZONE_SEVERE   = "severe"
 DEFAULT_ZONE  = ZONE_SEVERE
-HOLD_SECONDS  = 2.0
+HOLD_SECONDS  = 3.0
 ZERO_SAMPLES  = 5
 CLICK_TIMEOUT = 3.0
 REPO_DIR      = "/home/pi/pfe-sensor"
@@ -1045,7 +1045,43 @@ def _wrap2(text, maxlen=24):
         line1 = (line1 + " " + w).strip()
     line2 = text[len(line1):].strip()
     return line1, line2
-def make_screen_boot(stage, temp_c):
+def _draw_trefoil(draw, cx, cy, r, color, hub_color=(0,0,0)):
+    """Simplified radiation trefoil: 3 equal 60°-wide pie-slice blades,
+    spaced 120° apart (first one pointing straight up), with a small
+    contrasting hub in the middle — drawn from scratch so no image asset
+    is needed."""
+    for k in range(3):
+        start = -90 - 30 + k*120
+        end   = start + 60
+        draw.pieslice([cx-r,cy-r,cx+r,cy+r], start, end, fill=color)
+    hub = r * 0.18
+    draw.ellipse([cx-hub,cy-hub,cx+hub,cy+hub], fill=hub_color)
+def draw_hold_gauge(img, draw, cx, cy, r, progress):
+    """Long-press visual feedback: a dim 'target' trefoil is always shown,
+    and a bright yellow trefoil is progressively revealed by a clockwise
+    pie-wipe (like a clock's second hand sweeping around) as `progress`
+    (0..1) increases — confirms the button press is being registered and
+    shows roughly how much longer to hold it."""
+    _draw_trefoil(draw, cx, cy, r, (60,60,35), hub_color=(20,20,20))
+    if progress <= 0:
+        return
+    bright = Image.new('RGB', img.size, (0,0,0))
+    bd = ImageDraw.Draw(bright)
+    _draw_trefoil(bd, cx, cy, r, (255,210,0), hub_color=(0,0,0))
+    mask = Image.new('L', img.size, 0)
+    md = ImageDraw.Draw(mask)
+    sweep = max(1, min(360, int(360*progress)))
+    md.pieslice([cx-r-2,cy-r-2,cx+r+2,cy+r+2], -90, -90+sweep, fill=255)
+    revealed = Image.composite(bright, img, mask)
+    img.paste(revealed, (0,0))
+def current_hold_progress():
+    """0..1 progress toward completing a long press right now, or None if
+    the button isn't currently being held down. Used to animate the hold
+    gauge; HOLD_SECONDS is the actual long-press threshold everywhere."""
+    if _button_press_time is None:
+        return None
+    return min(1.0, (time.time() - _button_press_time) / HOLD_SECONDS)
+def make_screen_boot(stage, temp_c, hold=None):
     img=Image.new('RGB',(240,280),(0,0,0)); draw=ImageDraw.Draw(img)
     f_big=_font(34,True); f_med=_font(18,True); f_small=_font(14,False); f_tiny=_font(12,False)
     draw.text((6,4),DEVICE_NAME,font=f_small,fill=(120,120,255))
@@ -1093,8 +1129,12 @@ def make_screen_boot(stage, temp_c):
         l1,l2=_wrap2(status,26)
         draw.text((6,80),l1,font=f_small,fill=(100,220,255))
         if l2: draw.text((6,100),l2,font=f_small,fill=(100,220,255))
-        draw.text((6,170),"LONG press  = Host",font=f_tiny,fill=(150,150,150))
-        draw.text((6,190),"SHORT press = Join",font=f_tiny,fill=(150,150,150))
+        if hold is not None:
+            draw_hold_gauge(img, draw, 120, 175, 42, hold)
+            draw.text((45,225),"Hold for HOST...",font=f_tiny,fill=(255,210,0))
+        else:
+            draw.text((6,170),"LONG press  = Host",font=f_tiny,fill=(150,150,150))
+            draw.text((6,190),"SHORT press = Join",font=f_tiny,fill=(150,150,150))
     elif stage=="lock_baseline":
         draw.text((6,32),"Ready to lock",font=f_med,fill=(200,200,255))
         draw.text((6,58),"baseline pressure",font=f_med,fill=(200,200,255))
@@ -1107,7 +1147,7 @@ def make_screen_boot(stage, temp_c):
     with lock: batt=current_battery
     draw_battery_bar(draw,batt)
     return image_to_pixels(img)
-def make_screen_running(p1, p2, p3, p4, t1, tgt1, tgt2, tgt3, tgt4, mode, mux_present):
+def make_screen_running(p1, p2, p3, p4, t1, tgt1, tgt2, tgt3, tgt4, mode, mux_present, hold=None):
     img=Image.new('RGB',(240,280),(0,0,0)); draw=ImageDraw.Draw(img)
     f_big=_font(38,True); f_med=_font(18,True); f_small=_font(14,False); f_tiny=_font(12,False)
     mode_colors={"home":(100,200,100),"host":(0,230,0),"client":(0,230,0),
@@ -1169,6 +1209,12 @@ def make_screen_running(p1, p2, p3, p4, t1, tgt1, tgt2, tgt3, tgt4, mode, mux_pr
               fill=(100,180,255) if ip else (160,160,160))
     with lock: batt=current_battery
     draw_battery_bar(draw,batt)
+    if hold is not None:
+        # Long-hold-to-re-enter-setup feedback — same gauge as host_or_join,
+        # overlaid on the running screen while the button is held.
+        draw.rectangle([20,60,220,220],fill=(0,0,0))
+        draw_hold_gauge(img, draw, 120, 140, 50, hold)
+        draw.text((35,205),"Hold for SETUP...",font=f_tiny,fill=(255,210,0))
     return image_to_pixels(img)
 def screen_thread(board, mux_present):
     last=None
@@ -1181,20 +1227,24 @@ def screen_thread(board, mux_present):
             mode=wifi_mode; stage=boot_stage
             tc=temp_clicks; zc=zone_clicks; tbc=temp_band_choice; z=climate_zone
             wstat=wifi_status
+        hold=current_hold_progress()
         current=(stage,
                  round(p1,2) if p1 is not None else None,
                  round(p2,2) if p2 is not None else None,
                  round(p3,2) if p3 is not None else None,
                  round(p4,2) if p4 is not None else None,
-                 tg1,tg2,tg3,tg4,mode,tc,zc,tbc,z,wstat)
+                 tg1,tg2,tg3,tg4,mode,tc,zc,tbc,z,wstat,
+                 round(hold,2) if hold is not None else None)
         if current!=last:
             if stage=="running":
-                screen_data=make_screen_running(p1,p2,p3,p4,t1,tg1,tg2,tg3,tg4,mode,mux_present)
+                screen_data=make_screen_running(p1,p2,p3,p4,t1,tg1,tg2,tg3,tg4,mode,mux_present,hold)
             else:
-                screen_data=make_screen_boot(stage,t1)
+                screen_data=make_screen_boot(stage,t1,hold)
             board.draw_image(0,0,240,280,screen_data)
             last=current
-        time.sleep(0.5)
+        # Poll faster while a press is in progress so the hold gauge
+        # sweeps smoothly instead of stepping every half second.
+        time.sleep(0.1 if hold is not None else 0.5)
 # =============================================================
 # Main
 # =============================================================
